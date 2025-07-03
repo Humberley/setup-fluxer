@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #-------------------------------------------------------------------------------
-# Script: Instalador de Ambiente Fluxer (Corrigido v4)
+# Script: Instalador de Ambiente Fluxer (Corrigido v5)
 # Descrição: Implementa a lógica de instalação do SetupOrion,
 #            com drop/criação de bancos de dados para garantir ambiente limpo.
 # Autor: Humberley / Gemini
@@ -905,7 +905,7 @@ create_databases() {
     msg_header "REDEFININDO BANCOS DE DADOS NO POSTGRES"
     
     local postgres_container_id
-    local retries=30
+    local retries=40 # Aumenta as tentativas para 200 segundos
     
     echo "Aguardando o container do Postgres ser criado..."
     while [[ -z "$postgres_container_id" && $retries -gt 0 ]]; do
@@ -918,13 +918,13 @@ create_databases() {
     done
 
     if [[ -z "$postgres_container_id" ]]; then
-        msg_fatal "Container do Postgres não foi encontrado após 150 segundos."
+        msg_fatal "Container do Postgres não foi encontrado após 200 segundos."
     fi
     
     msg_success "Container do Postgres encontrado: ${postgres_container_id}"
     
     echo "Aguardando o Postgres aceitar conexões..."
-    retries=30
+    retries=40 # Aumenta as tentativas para 200 segundos
     while ! docker exec "$postgres_container_id" pg_isready -U postgres &>/dev/null; do
         printf "."
         sleep 5
@@ -935,9 +935,9 @@ create_databases() {
     done
     msg_success "Postgres está pronto!"
 
-    # Adiciona uma pequena pausa para garantir que o Postgres esteja totalmente estabilizado antes das operações de DB.
-    echo "Pausa breve para estabilização completa do Postgres antes de redefinir bancos de dados..."
-    sleep 10 # Aumentado o tempo de espera aqui
+    # Adiciona uma pausa maior para garantir que o Postgres esteja totalmente estabilizado antes das operações de DB.
+    echo "Pausa prolongada para estabilização completa do Postgres antes de redefinir bancos de dados..."
+    sleep 20 # Aumentado o tempo de espera aqui para 20 segundos
 
     echo "Limpando e recriando banco de dados 'n8n_queue'..."
     docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS n8n_queue WITH (FORCE);"
@@ -1039,15 +1039,20 @@ main() {
     echo "Criando os volumes Docker...";
     
     # Remover o stack do Postgres e o volume para garantir um ambiente limpo
+    echo "Removendo stacks antigos do n8n (se existirem)..."
+    docker stack rm n8n >/dev/null 2>&1
+    sleep 10 # Aguarda a remoção do stack do n8n
+    
     echo "Removendo stack 'postgres' e volume '${POSTGRES_VOLUME}' para garantir ambiente limpo...";
     docker stack rm postgres >/dev/null 2>&1 # Remover o stack postgres
-    sleep 5 # Pequena pausa para o swarm processar a remoção
+    sleep 10 # Aumenta a pausa para o swarm processar a remoção do stack
     docker volume rm "${POSTGRES_VOLUME}" >/dev/null 2>&1
+    sleep 5 # Aumenta a pausa para o sistema de arquivos liberar o volume
 
     docker volume create "portainer_data" >/dev/null
     docker volume create "volume_swarm_certificates" >/dev/null
     docker volume create "volume_swarm_shared" >/dev/null
-    docker volume create "${POSTGRES_VOLUME}" >/dev/null
+    docker volume create "${POSTGRES_VOLUME}" >/dev/null # Recria o volume
     docker volume create "${REDIS_VOLUME}" >/dev/null
     docker volume create "${MINIO_VOLUME}" >/dev/null
     docker volume create "${EVOLUTION_VOLUME}" >/dev/null
@@ -1106,7 +1111,12 @@ main() {
     # --- ETAPA 5: IMPLANTAR STACKS DE APLICAÇÃO ---
     msg_header "[5/5] IMPLANTANDO STACKS DE APLICAÇÃO"
 
+    echo "Aguardando 30 segundos antes de implantar as aplicações para garantir a estabilidade da infraestrutura..."
+    sleep 30 # Aumenta o atraso antes de implantar as aplicações
+
+    # Agora, e somente agora, subimos o stack do n8n
     deploy_stack_via_api "n8n" "$(generate_n8n_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
+    
     deploy_stack_via_api "typebot" "$(generate_typebot_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
     deploy_stack_via_api "evolution" "$(generate_evolution_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
 

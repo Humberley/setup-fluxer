@@ -1,11 +1,10 @@
 #!/bin/bash
 
 #-------------------------------------------------------------------------------
-# Script: Instalador de Ambiente Fluxer
-# Descrição: Implementa a lógica de instalação robusta do SetupOrion,
-#            com configurações YAML embutidas para máxima robustez.
-# Autor: Humberley / [Seu Nome]
-# Versão: 12.0 (Final - YAML Embutido)
+# Script: Instalador de Ambiente Fluxer - VERSÃO CORRIGIDA
+# Descrição: Corrige problemas com API do Portainer e adiciona fallback
+# Autor: Humberley / Corrigido
+# Versão: 12.1 (Correção API + Fallback)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -142,7 +141,29 @@ wait_stack() {
     done
 }
 
-# Função para implantar um stack via API do Portainer
+# Função para testar conectividade da API do Portainer
+test_portainer_api() {
+    local portainer_domain=$1
+    local api_key=$2
+    
+    echo "Testando conectividade da API do Portainer..."
+    local response
+    response=$(curl -s -k -w "\n%{http_code}" -H "X-API-Key: ${api_key}" \
+        "https://${portainer_domain}/api/endpoints")
+    
+    local http_code
+    http_code=$(tail -n1 <<< "$response")
+    
+    if [[ "$http_code" == "200" ]]; then
+        msg_success "API do Portainer está funcionando!"
+        return 0
+    else
+        msg_error "API do Portainer não está respondendo corretamente (Código: ${http_code})"
+        return 1
+    fi
+}
+
+# Função CORRIGIDA para implantar stack via API do Portainer
 deploy_stack_via_api() {
     local stack_name=$1
     local compose_content=$2
@@ -154,32 +175,91 @@ deploy_stack_via_api() {
     echo "-----------------------------------------------------"
     echo "Implantando o stack: ${NEGRITO}${stack_name}${RESET}..."
 
+    # Criar payload JSON corrigido
     local json_payload
     json_payload=$(jq -n \
         --arg name "$stack_name" \
         --arg content "$compose_content" \
-        '{Name: $name, StackFileContent: $content, SwarmID: "'"$swarm_id"'"}' )
+        --arg swarmID "$swarm_id" \
+        '{
+            Name: $name,
+            StackFileContent: $content,
+            SwarmID: $swarmID,
+            Env: []
+        }')
 
-    local response
-    response=$(curl -s -k -w "\n%{http_code}" -X POST \
-        -H "X-API-Key: ${api_key}" \
-        -H "Content-Type: application/json" \
-        --data-binary "$json_payload" \
-        "https://${portainer_domain}/api/stacks?type=1&method=string&endpointId=${endpoint_id}")
+    # Tentar múltiplos endpoints da API
+    local endpoints=(
+        "https://${portainer_domain}/api/stacks?type=1&method=string&endpointId=${endpoint_id}"
+        "https://${portainer_domain}/api/stacks/create/swarm/string?endpointId=${endpoint_id}"
+        "https://${portainer_domain}/api/stacks?endpointId=${endpoint_id}&type=1&method=string"
+    )
+
+    for endpoint in "${endpoints[@]}"; do
+        echo "Tentando endpoint: ${endpoint}"
+        
+        local response
+        response=$(curl -s -k -w "\n%{http_code}" -X POST \
+            -H "X-API-Key: ${api_key}" \
+            -H "Content-Type: application/json" \
+            --data-binary "$json_payload" \
+            "$endpoint")
+        
+        local http_code
+        http_code=$(tail -n1 <<< "$response")
+        local response_body
+        response_body=$(sed '$ d' <<< "$response")
+
+        if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
+            msg_success "Stack '${stack_name}' implantado com sucesso via API!"
+            return 0
+        else
+            echo "Falha no endpoint (Código: ${http_code})"
+            echo "Resposta: ${response_body}"
+        fi
+    done
+
+    # Se chegou aqui, todos os endpoints falharam
+    msg_error "Falha ao implantar '${stack_name}' via API em todos os endpoints testados."
     
-    local http_code
-    http_code=$(tail -n1 <<< "$response")
-    local response_body
-    response_body=$(sed '$ d' <<< "$response")
-
-    if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
-        msg_success "Stack '${stack_name}' implantado com sucesso via API do Portainer!"
+    # FALLBACK: Usar docker stack deploy diretamente
+    msg_warning "Tentando fallback com docker stack deploy..."
+    
+    if echo "$compose_content" | docker stack deploy --compose-file - "$stack_name"; then
+        msg_success "Stack '${stack_name}' implantado com sucesso via docker stack deploy!"
         return 0
     else
-        local error_message
-        error_message=$(echo "$response_body" | jq -r '.message, .details' 2>/dev/null | tr '\n' ' ')
-        msg_error "Falha ao implantar '${stack_name}' via API (Código: ${http_code}): ${error_message}"
-        echo "Resposta completa da API: ${response_body}"
+        msg_error "Falha também no fallback para '${stack_name}'"
+        return 1
+    fi
+}
+
+# Função para verificar versão do Portainer
+check_portainer_version() {
+    local portainer_domain=$1
+    local api_key=$2
+    
+    echo "Verificando versão do Portainer..."
+    local response
+    response=$(curl -s -k -H "X-API-Key: ${api_key}" \
+        "https://${portainer_domain}/api/status")
+    
+    local version
+    version=$(echo "$response" | jq -r '.Version // "unknown"')
+    
+    if [[ "$version" != "unknown" && "$version" != "null" ]]; then
+        msg_success "Versão do Portainer: ${version}"
+        
+        # Verificar se é uma versão que suporta a API de stacks
+        if [[ "$version" =~ ^2\.[0-9]+\.[0-9]+$ ]]; then
+            msg_success "Versão compatível com API de stacks."
+            return 0
+        else
+            msg_warning "Versão do Portainer pode não ser totalmente compatível."
+            return 1
+        fi
+    else
+        msg_error "Não foi possível determinar a versão do Portainer."
         return 1
     fi
 }
@@ -521,7 +601,6 @@ networks:
 EOL
 }
 
-
 # === FUNÇÃO PRINCIPAL ===
 main() {
     clear
@@ -534,7 +613,7 @@ main() {
     echo "██║     ███████╗ ╚██████╔╝██║  ██╗███████╗██║   ██     ███████║███████╗   ██║   ╚██████╔╝██║     "
     echo "╚═╝     ╚══════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝    ██     ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝     "
     echo -e "${RESET}"
-    echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS${RESET}"
+    echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - VERSÃO CORRIGIDA${RESET}"
 
     # --- COLETA DE DADOS DO USUÁRIO COM VALIDAÇÃO ---
     msg_header "COLETANDO INFORMAÇÕES"
@@ -546,95 +625,4 @@ main() {
 
     # --- GERAÇÃO DE VARIÁVEIS E VERIFICAÇÃO DE DNS ---
     msg_header "GERANDO CONFIGURAÇÕES E VERIFICANDO DNS"
-    export DOMINIO_RAIZ LE_EMAIL PORTAINER_PASSWORD MINIO_ROOT_USER MINIO_ROOT_PASSWORD
-    export PORTAINER_DOMAIN="portainer.${DOMINIO_RAIZ}"
-    export N8N_EDITOR_DOMAIN="n8n.${DOMINIO_RAIZ}"
-    export N8N_WEBHOOK_DOMAIN="nwn.${DOMINIO_RAIZ}"
-    export TYPEBOT_EDITOR_DOMAIN="tpb.${DOMINIO_RAIZ}"
-    export TYPEBOT_VIEWER_DOMAIN="tpv.${DOMINIO_RAIZ}"
-    export MINIO_CONSOLE_DOMAIN="minio.${DOMINIO_RAIZ}"
-    export MINIO_S3_DOMAIN="s3.${DOMINIO_RAIZ}"
-    export EVOLUTION_DOMAIN="evo.${DOMINIO_RAIZ}"
-
-    export POSTGRES_PASSWORD=$(openssl rand -hex 16)
-    export N8N_ENCRYPTION_KEY=$(openssl rand -hex 16)
-    export TYPEBOT_ENCRYPTION_KEY=$(openssl rand -hex 16)
-    export EVOLUTION_API_KEY=$(openssl rand -hex 16)
-    
-    export REDE_DOCKER="fluxerNet"
-    msg_success "Variáveis geradas."
-
-    check_dns "${PORTAINER_DOMAIN}"
-
-    # --- PREPARAÇÃO DO AMBIENTE SWARM ---
-    msg_header "PREPARANDO O AMBIENTE SWARM"
-    echo "Garantindo a existência da rede Docker overlay '${REDE_DOCKER}'..."; docker network rm "$REDE_DOCKER" >/dev/null 2>&1; docker network create --driver=overlay --attachable "$REDE_DOCKER" || msg_fatal "Falha ao criar a rede overlay '${REDE_DOCKER}'."; msg_success "Rede '${REDE_DOCKER}' pronta."
-    echo "Criando os volumes Docker..."; docker volume create "portainer_data" >/dev/null; docker volume create "volume_swarm_certificates" >/dev/null; docker volume create "volume_swarm_shared" >/dev/null; docker volume create "postgres_data" >/dev/null; docker volume create "redis_data" >/dev/null; docker volume create "minio_data" >/dev/null; docker volume create "evolution_instances" >/dev/null; msg_success "Volumes prontos."
-
-    # --- ETAPA 1: INSTALAR TRAEFIK E PORTAINER ---
-    msg_header "[1/4] INSTALANDO TRAEFIK E PORTAINER"
-    
-    echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}...";
-    docker stack deploy --compose-file <(generate_traefik_yml) traefik || msg_fatal "Falha ao implantar Traefik."
-    msg_success "Stack 'traefik' implantado."
-    
-    echo "---"; echo "Implantando: ${NEGRITO}portainer${RESET}...";
-    docker stack deploy --compose-file <(generate_portainer_yml) portainer || msg_fatal "Falha ao implantar Portainer."
-    msg_success "Stack 'portainer' implantado."
-
-    # --- ETAPA 2: VERIFICAR SERVIÇOS E CONFIGURAR PORTAINER ---
-    msg_header "[2/4] VERIFICANDO SERVIÇOS E CONFIGURANDO PORTAINER"
-    wait_stack "traefik_traefik"
-    wait_stack "portainer_portainer"
-    
-    echo "Aguardando 30 segundos para estabilização dos serviços..."; sleep 30
-
-    echo "Tentando criar conta de administrador no Portainer..."; local max_retries=10; local account_created=false
-    for i in $(seq 1 $max_retries); do
-        local init_response; init_response=$(curl -s -k -w "\n%{http_code}" -X POST "https://${PORTAINER_DOMAIN}/api/users/admin/init" -H "Content-Type: application/json" --data "{\"Username\": \"admin\", \"Password\": \"${PORTAINER_PASSWORD}\"}"); local http_code=$(tail -n1 <<< "$init_response"); local response_body=$(sed '$ d' <<< "$init_response")
-        if [[ "$http_code" == "200" ]]; then msg_success "Utilizador 'admin' do Portainer criado!"; account_created=true; break; else msg_warning "Tentativa ${i}/${max_retries} falhou."; echo "Código HTTP: ${http_code}"; echo "Resposta: ${response_body}"; echo "Aguardando 15s..."; sleep 15; fi
-    done
-    if [ "$account_created" = false ]; then msg_fatal "Não foi possível criar a conta de administrador no Portainer."; fi
-
-    # --- ETAPA 3: OBTER CHAVE DE API ---
-    msg_header "[3/4] OBTENDO CHAVE DE API DO PORTAINER"
-    echo "A autenticar para obter token JWT..."; local jwt_response; jwt_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/auth" -H "Content-Type: application/json" --data "{\"username\": \"admin\", \"password\": \"${PORTAINER_PASSWORD}\"}"); local PORTAINER_JWT=$(echo "$jwt_response" | jq -r .jwt); if [[ -z "$PORTAINER_JWT" || "$PORTAINER_JWT" == "null" ]]; then msg_fatal "Falha ao obter o token JWT."; fi; msg_success "Token JWT obtido."
-    
-    echo "Decodificando token para obter o ID do utilizador..."; local USER_ID; USER_ID=$(echo "$PORTAINER_JWT" | cut -d. -f2 | base64 --decode 2>/dev/null | jq -r .id); if [[ -z "$USER_ID" || "$USER_ID" == "null" ]]; then msg_fatal "Falha ao extrair o ID do utilizador do token JWT."; fi; msg_success "ID do utilizador 'admin' é: ${USER_ID}"
-
-    echo "A gerar chave de API..."; local apikey_response; apikey_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/users/${USER_ID}/tokens" -H "Authorization: Bearer ${PORTAINER_JWT}" -H "Content-Type: application/json" --data "{\"description\": \"fluxer_installer_key\", \"password\": \"${PORTAINER_PASSWORD}\"}"); local PORTAINER_API_KEY=$(echo "$apikey_response" | jq -r .rawAPIKey); if [[ -z "$PORTAINER_API_KEY" || "$PORTAINER_API_KEY" == "null" ]]; then msg_error "A resposta da API para criação da chave foi: $apikey_response"; msg_fatal "Falha ao gerar a chave de API."; fi; msg_success "Chave de API gerada!"
-
-    echo "Obtendo Swarm ID..."; local ENDPOINT_ID=1; local SWARM_ID; SWARM_ID=$(curl -s -k -H "X-API-Key: ${PORTAINER_API_KEY}" "https://${PORTAINER_DOMAIN}/api/endpoints/${ENDPOINT_ID}/docker/swarm" | jq -r .ID); if [[ -z "$SWARM_ID" || "$SWARM_ID" == "null" ]]; then msg_fatal "Falha ao obter o Swarm ID."; fi; msg_success "Swarm ID obtido: ${SWARM_ID}"
-
-    # --- ETAPA 4: IMPLANTAR STACKS DE APLICAÇÃO VIA API ---
-    msg_header "[4/4] IMPLANTANDO STACKS DE APLICAÇÃO"
-    
-    deploy_stack_via_api "redis" "$(generate_redis_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
-    deploy_stack_via_api "postgres" "$(generate_postgres_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
-    deploy_stack_via_api "minio" "$(generate_minio_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
-    deploy_stack_via_api "n8n" "$(generate_n8n_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
-    deploy_stack_via_api "typebot" "$(generate_typebot_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
-    deploy_stack_via_api "evolution" "$(generate_evolution_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
-
-    # --- RESUMO FINAL ---
-    msg_header "🎉 INSTALAÇÃO CONCLUÍDA 🎉"
-    echo "Aguarde alguns minutos para que todos os serviços sejam iniciados."; echo "Pode verificar o estado no seu painel Portainer ou com o comando: ${NEGRITO}docker service ls${RESET}"; echo; echo "Abaixo estão os seus links de acesso:"; echo
-    echo -e "${NEGRITO}Painel Portainer:   https://${PORTAINER_DOMAIN}${RESET}"
-    echo -e "${NEGRITO}Painel n8n (editor):  https://${N8N_EDITOR_DOMAIN}${RESET}"
-    echo -e "${NEGRITO}Builder Typebot:      https://${TYPEBOT_EDITOR_DOMAIN}${RESET}"
-    echo -e "${NEGRITO}MinIO Painel:         https://${MINIO_CONSOLE_DOMAIN}${RESET}"
-    echo -e "${NEGRITO}Evolution API:        https://${EVOLUTION_DOMAIN}${RESET}"
-    echo
-    read -p "Deseja exibir as senhas e chaves geradas? (s/N): " SHOW_CREDS < /dev/tty
-    if [[ "$SHOW_CREDS" =~ ^[Ss]$ ]]; then
-        echo; msg_header "CREDENCIAS GERADAS (guarde em local seguro)"
-        echo -e "${NEGRITO}Senha do Portainer:      ${PORTAINER_PASSWORD}${RESET}"
-        echo -e "${NEGRITO}Utilizador root do MinIO:   ${MINIO_ROOT_USER}${RESET}"
-        echo -e "${NEGRITO}Senha root do MinIO:     ${MINIO_ROOT_PASSWORD}${RESET}"
-        echo -e "${NEGRITO}Chave da Evolution API:  ${EVOLUTION_API_KEY}${RESET}"
-    fi
-    echo; msg_success "Tudo pronto! Aproveite o seu novo ambiente de automação."
-}
-
-# --- PONTO DE ENTRADA DO SCRIPT ---
-main
+    export DOMINIO_RAIZ LE_EMAIL PORTAINER_PASSWORD MINIO_ROOT_USER MINIO_ROOT

@@ -2,10 +2,10 @@
 
 #-------------------------------------------------------------------------------
 # Script: Instalador de Ambiente Fluxer
-# Descrição: Coleta as informações do usuário, junta os ficheiros .yml,
-#            gera o .env e inicia os serviços Docker.
+# Descrição: Coleta as informações do usuário, gera o .env e inicia cada
+#            serviço como uma stack individual no Docker Swarm.
 # Autor: Humberley / [Seu Nome]
-# Versão: 2.3 (Corrige erro de junção de YML)
+# Versão: 3.1 (Usa Stacks Individuais)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -31,51 +31,6 @@ msg_error() {
     exit 1
 }
 
-# === FUNÇÃO PARA JUNTAR OS FICHEIROS YML (CORRIGIDA) ===
-build_compose_file() {
-    msg_header "CONSTRUINDO O FICHEIRO DOCKER-COMPOSE.YML"
-    
-    local STACKS_DIR="stacks"
-    local OUTPUT_FILE="docker-compose.yml"
-
-    if [ ! -d "$STACKS_DIR" ]; then
-        msg_error "O diretório '${STACKS_DIR}' contendo os templates não foi encontrado."
-    fi
-
-    # Apaga um ficheiro antigo, se existir, para começar do zero
-    if [ -f "$OUTPUT_FILE" ]; then
-        rm "$OUTPUT_FILE"
-    fi
-
-    echo "Juntando os ficheiros de template de '${STACKS_DIR}'..."
-    
-    # Adiciona o cabeçalho inicial ao ficheiro docker-compose.yml
-    echo "version: '3.8'" > "$OUTPUT_FILE"
-    echo "" >> "$OUTPUT_FILE"
-    echo "services:" >> "$OUTPUT_FILE"
-
-    # Encontra todos os ficheiros .template.yml e adiciona o seu conteúdo
-    find "$STACKS_DIR" -type f -name "*.template.yml" -print0 | while IFS= read -r -d $'\0' file; do
-        # Adiciona um comentário para indicar de onde veio o bloco de código
-        echo "" >> "$OUTPUT_FILE"
-        echo "# --- Bloco de: $(basename "$file") ---" >> "$OUTPUT_FILE"
-        
-        # CORREÇÃO: Filtra as chaves 'version:' e 'services:' dos templates
-        # para evitar duplicação e depois indenta o resto do conteúdo.
-        grep -v -E '^\s*version:|^\s*services:' "$file" | sed 's/^/  /' >> "$OUTPUT_FILE"
-        
-        echo "" >> "$OUTPUT_FILE"
-    done
-
-    # Adiciona a secção de redes no final
-    echo "networks:" >> "$OUTPUT_FILE"
-    echo "  fluxerNet:" >> "$OUTPUT_FILE"
-    echo "    external: true" >> "$OUTPUT_FILE"
-
-    msg_success "Ficheiro ${OUTPUT_FILE} construído com sucesso!"
-}
-
-
 # === FUNÇÃO PRINCIPAL ===
 main() {
     clear
@@ -89,6 +44,16 @@ main() {
     echo "╚═╝     ╚══════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝    ██     ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝     "
     echo -e "${RESET}"
     echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS${RESET}"
+
+    # --- VERIFICAÇÃO DO DOCKER SWARM ---
+    msg_header "VERIFICANDO AMBIENTE DOCKER SWARM"
+    if ! docker info 2>/dev/null | grep -q "Swarm: active"; then
+        msg_warning "Docker Swarm não está ativo. A inicializar..."
+        if ! docker swarm init; then
+            msg_error "Falha ao inicializar o Docker Swarm."
+        fi
+    fi
+    msg_success "Docker Swarm está ativo."
 
     # --- INSTRUÇÕES DNS ---
     msg_header "CONFIGURAÇÃO DNS (WILDCARD)"
@@ -105,16 +70,10 @@ main() {
 
     while [[ -z "$DOMINIO_RAIZ" ]]; do
         read -p "🌐 Qual é o seu domínio principal (ex: seudominio.com.br): " DOMINIO_RAIZ < /dev/tty
-        if [[ -z "$DOMINIO_RAIZ" ]]; then
-            msg_warning "O domínio não pode ser vazio."
-        fi
     done
 
     while [[ -z "$LE_EMAIL" ]]; do
         read -p "📧 Email para o certificado SSL (Let's Encrypt): " LE_EMAIL < /dev/tty
-        if [[ -z "$LE_EMAIL" ]]; then
-            msg_warning "O email não pode ser vazio."
-        fi
     done
 
     while true; do
@@ -144,80 +103,76 @@ main() {
     msg_header "GERANDO CONFIGURAÇÕES"
     echo "Gerando subdomínios e chaves de segurança..."
 
-    PORTAINER_DOMAIN="portainer.${DOMINIO_RAIZ}"
-    N8N_EDITOR_DOMAIN="n8n.${DOMINIO_RAIZ}"
-    N8N_WEBHOOK_DOMAIN="nwn.${DOMINIO_RAIZ}"
-    TYPEBOT_EDITOR_DOMAIN="tpb.${DOMINIO_RAIZ}"
-    TYPEBOT_VIEWER_DOMAIN="tpv.${DOMINIO_RAIZ}"
-    MINIO_CONSOLE_DOMAIN="minio.${DOMINIO_RAIZ}"
-    MINIO_S3_DOMAIN="s3.${DOMINIO_RAIZ}"
-    EVOLUTION_DOMAIN="evo.${DOMINIO_RAIZ}"
+    export DOMINIO_RAIZ LE_EMAIL PORTAINER_PASSWORD MINIO_ROOT_USER MINIO_ROOT_PASSWORD
 
-    POSTGRES_PASSWORD=$(openssl rand -hex 16)
-    N8N_ENCRYPTION_KEY=$(openssl rand -hex 16)
-    TYPEBOT_ENCRYPTION_KEY=$(openssl rand -hex 16)
-    EVOLUTION_API_KEY=$(openssl rand -hex 16)
+    export PORTAINER_DOMAIN="portainer.${DOMINIO_RAIZ}"
+    export N8N_EDITOR_DOMAIN="n8n.${DOMINIO_RAIZ}"
+    export N8N_WEBHOOK_DOMAIN="nwn.${DOMINIO_RAIZ}"
+    export TYPEBOT_EDITOR_DOMAIN="tpb.${DOMINIO_RAIZ}"
+    export TYPEBOT_VIEWER_DOMAIN="tpv.${DOMINIO_RAIZ}"
+    export MINIO_CONSOLE_DOMAIN="minio.${DOMINIO_RAIZ}"
+    export MINIO_S3_DOMAIN="s3.${DOMINIO_RAIZ}"
+    export EVOLUTION_DOMAIN="evo.${DOMINIO_RAIZ}"
+
+    export POSTGRES_PASSWORD=$(openssl rand -hex 16)
+    export N8N_ENCRYPTION_KEY=$(openssl rand -hex 16)
+    export TYPEBOT_ENCRYPTION_KEY=$(openssl rand -hex 16)
+    export EVOLUTION_API_KEY=$(openssl rand -hex 16)
     
-    msg_success "Configurações geradas."
-
-    # --- CRIAÇÃO DO FICHEIRO .ENV ---
-    echo "Criando o ficheiro de configuração .env..."
-    cat > .env <<EOF
-# Gerado por Fluxer Installer v2.3 em $(date)
-
-# --- GERAL ---
-REDE_DOCKER=fluxerNet
-LE_EMAIL=${LE_EMAIL}
-
-# --- PORTAINER ---
-PORTAINER_DOMAIN=${PORTAINER_DOMAIN}
-PORTAINER_PASSWORD=${PORTAINER_PASSWORD}
-
-# --- BANCO DE DADOS (PostgreSQL) ---
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-
-# --- ARMAZENAMENTO (MinIO) ---
-MINIO_CONSOLE_DOMAIN=${MINIO_CONSOLE_DOMAIN}
-MINIO_S3_DOMAIN=${MINIO_S3_DOMAIN}
-MINIO_ROOT_USER=${MINIO_ROOT_USER}
-MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-
-# --- N8N ---
-N8N_EDITOR_DOMAIN=${N8N_EDITOR_DOMAIN}
-N8N_WEBHOOK_DOMAIN=${N8N_WEBHOOK_DOMAIN}
-N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
-
-# --- TYPEBOT ---
-TYPEBOT_EDITOR_DOMAIN=${TYPEBOT_EDITOR_DOMAIN}
-TYPEBOT_VIEWER_DOMAIN=${TYPEBOT_VIEWER_DOMAIN}
-TYPEBOT_ENCRYPTION_KEY=${TYPEBOT_ENCRYPTION_KEY}
-
-# --- EVOLUTION API ---
-EVOLUTION_DOMAIN=${EVOLUTION_DOMAIN}
-EVOLUTION_API_KEY=${EVOLUTION_API_KEY}
-EOF
-    msg_success "Ficheiro .env criado com sucesso!"
-
-    # --- CHAMADA DA NOVA FUNÇÃO ---
-    build_compose_file
-
-    # --- INICIANDO OS SERVIÇOS ---
-    msg_header "INICIANDO OS SERVIÇOS"
+    export PORTAINER_VOLUME="portainer_data"
+    export POSTGRES_VOLUME="postgres_data"
+    export REDIS_VOLUME="redis_data"
+    export MINIO_VOLUME="minio_data"
+    export EVOLUTION_VOLUME="evolution_instances"
+    export REDE_DOCKER="fluxerNet"
     
-    echo "Criando a rede Docker (se não existir)..."
-    docker network create fluxerNet >/dev/null 2>&1
+    msg_success "Configurações geradas e exportadas para o ambiente."
+
+    # --- PREPARAÇÃO DO AMBIENTE SWARM ---
+    msg_header "PREPARANDO O AMBIENTE SWARM"
     
-    echo "Iniciando os contentores com 'docker-compose up -d'..."
-    msg_warning "Este processo pode levar vários minutos. Por favor, aguarde."
-    if docker-compose up -d; then
-        msg_success "Todos os serviços foram iniciados com sucesso!"
-    else
-        msg_error "Houve um problema ao iniciar os serviços com o Docker Compose."
+    echo "Criando a rede Docker overlay (se não existir)..."
+    docker network create --driver=overlay --attachable "$REDE_DOCKER" >/dev/null 2>&1
+    msg_success "Rede '${REDE_DOCKER}' pronta."
+
+    echo "Criando os volumes Docker (se não existirem)..."
+    docker volume create "$PORTAINER_VOLUME" >/dev/null
+    docker volume create "$POSTGRES_VOLUME" >/dev/null
+    docker volume create "$REDIS_VOLUME" >/dev/null
+    docker volume create "$MINIO_VOLUME" >/dev/null
+    docker volume create "$EVOLUTION_VOLUME" >/dev/null
+    docker volume create "volume_swarm_certificates" >/dev/null
+    docker volume create "volume_swarm_shared" >/dev/null
+    msg_success "Volumes prontos."
+
+    # --- INICIANDO OS STACKS INDIVIDUALMENTE ---
+    msg_header "INICIANDO OS STACKS DE SERVIÇOS"
+    
+    local STACKS_DIR="stacks"
+    if [ ! -d "$STACKS_DIR" ]; then
+        msg_error "O diretório '${STACKS_DIR}' contendo os templates não foi encontrado."
     fi
+
+    # Itera sobre cada ficheiro .template.yml e cria uma stack para cada um
+    for file in $(find "$STACKS_DIR" -type f -name "*.template.yml" | sort); do
+        # Extrai o nome do ficheiro para usar como nome da stack (ex: "traefik")
+        stack_name=$(basename "$file" .template.yml)
+        
+        echo "-----------------------------------------------------"
+        echo "Implantando o stack: ${NEGRITO}${stack_name}${RESET}..."
+        
+        # Executa o docker stack deploy para o ficheiro atual
+        if docker stack deploy --compose-file "$file" "$stack_name"; then
+            msg_success "Stack '${stack_name}' implantado com sucesso!"
+        else
+            msg_error "Houve um problema ao implantar o stack '${stack_name}'."
+        fi
+    done
 
     # --- RESUMO FINAL ---
     msg_header "🎉 INSTALAÇÃO CONCLUÍDA 🎉"
-    echo "Aguarde alguns minutos para que todos os serviços e certificados SSL sejam configurados."
+    echo "Aguarde alguns minutos para que todos os serviços sejam iniciados."
+    echo "Pode verificar o estado com o comando: ${NEGRITO}docker service ls${RESET}"
     echo "Abaixo estão os seus links de acesso:"
     echo
     echo -e "${NEGRITO}Painel Portainer:   https://${PORTAINER_DOMAIN}${RESET}"

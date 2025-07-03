@@ -5,7 +5,7 @@
 # Descrição: Implementa a lógica de instalação robusta do SetupOrion,
 #            incluindo preparação, deploy, verificação e configuração em etapas.
 # Autor: Humberley / [Seu Nome]
-# Versão: 10.5 (Corrige a configuração do Traefik para v3)
+# Versão: 10.6 (Corrige payload da criação de usuário do Portainer)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -290,7 +290,7 @@ EOL
         local init_response
         init_response=$(curl -s -k -w "\n%{http_code}" -X POST "https://${PORTAINER_DOMAIN}/api/users/admin/init" \
             -H "Content-Type: application/json" \
-            --data "{\"Password\": \"${PORTAINER_PASSWORD}\"}")
+            --data "{\"Username\": \"admin\", \"Password\": \"${PORTAINER_PASSWORD}\"}")
         
         local http_code
         http_code=$(tail -n1 <<< "$init_response")

@@ -366,4 +366,4 @@ EOL
 }
 
 # --- PONTO DE ENTRADA DO SCRIPT ---
-mai
+main

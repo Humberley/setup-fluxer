@@ -2,15 +2,14 @@
 
 #-------------------------------------------------------------------------------
 # Script: Instalador Mestre Fluxer
-# Descrição: Prepara uma VPS Ubuntu nova, instalando todas as dependências
-#            necessárias (Git, Docker, Docker Compose) e, em seguida,
-#            executa o script de configuração do ambiente Fluxer.
+# Descrição: Prepara uma VPS Ubuntu nova, espelhando o processo robusto do
+#            SetupOrion para garantir que todas as dependências e configurações
+#            de sistema estejam prontas antes de prosseguir.
 # Autor: Humberley / [Seu Nome]
-# Versão: 3.0
+# Versão: 5.0 (Final - Lógica Orion implementada)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS GLOBAIS ===
-# Cores para uma saída mais legível
 VERDE='\033[1;32m'
 AZUL='\033[1;34m'
 AMARELO='\033[1;33m'
@@ -18,138 +17,122 @@ VERMELHO='\033[1;31m'
 NEGRITO='\033[1m'
 RESET='\033[0m'
 
-# Diretório de instalação para os arquivos de configuração
 INSTALL_DIR="/opt/setup-fluxer"
 REPO_URL="https://github.com/Humberley/setup-fluxer.git"
 INSTALL_SCRIPT_NAME="fluxer-install.sh"
 
-
 # === FUNÇÕES AUXILIARES ===
-
-# Exibe uma mensagem de cabeçalho
 msg_header() {
     echo -e "\n${AZUL}${NEGRITO}#-----------------------------------------------------#"
     echo -e "# ${1}"
     echo -e "#-----------------------------------------------------#${RESET}"
 }
-
-# Exibe uma mensagem de sucesso
 msg_success() {
     echo -e "${VERDE}✔ $1${RESET}"
 }
-
-# Exibe uma mensagem de aviso
 msg_warning() {
     echo -e "${AMARELO}⚠️ $1${RESET}"
 }
-
-# Exibe uma mensagem de erro e encerra o script
 msg_error() {
     echo -e "\n${VERMELHO}❌ ERRO: $1${RESET}\n"
     exit 1
 }
-
-# Verifica se um comando existe
 command_exists() {
     command -v "$1" &> /dev/null
 }
 
-
 # === FUNÇÕES DE INSTALAÇÃO ===
 
-# 1. Verifica permissões e atualiza o sistema
+# 1. Prepara o sistema com TODAS as dependências necessárias
 prepare_system() {
     msg_header "Preparando o Sistema (Ubuntu)"
 
-    # Verifica se o script está sendo executado como root
     if [ "$(id -u)" -ne 0 ]; then
         msg_error "Este script precisa ser executado como root. Use: curl ... | sudo bash"
     fi
     msg_success "Executando com permissões de root."
 
-    # Atualiza os pacotes do sistema
-    echo "Atualizando a lista de pacotes..."
-    if ! apt-get update -qq; then
-        msg_error "Falha ao atualizar a lista de pacotes (apt-get update)."
-    fi
+    echo -e "\n${NEGRITO}1/14 - [ OK ] - Fazendo Update...${RESET}"
+    apt-get update -qq || msg_warning "Falha no apt-get update."
+
+    echo -e "${NEGRITO}2/14 - [ OK ] - Fazendo Upgrade...${RESET}"
+    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq || msg_warning "Falha no apt-get upgrade."
     
-    echo "Instalando atualizações do sistema..."
-    # O DEBIAN_FRONTEND evita diálogos interativos durante a atualização
-    if ! DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq; then
-        msg_warning "Ocorreu um problema durante o 'apt-get upgrade'."
-    fi
+    local packages_to_install="sudo apt-utils dialog jq apache2-utils git python3 gettext-base dnsutils"
+    local step=3
+    for pkg in $packages_to_install; do
+        echo -e "${NEGRITO}${step}/14 - [ OK ] - Verificando/Instalando ${pkg}...${RESET}"
+        apt-get install -y "$pkg" -qq
+        step=$((step + 1))
+    done
 
-    echo "Instalando dependências essenciais (curl, git)..."
-    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y curl git -qq; then
-        msg_error "Falha ao instalar pacotes essenciais (curl, git)."
-    fi
+    echo -e "${NEGRITO}11/14 - [ OK ] - Configurando Timezone...${RESET}"
+    timedatectl set-timezone America/Sao_Paulo
 
-    msg_success "Sistema preparado e atualizado."
+    local server_name="fluxer-vps"
+    echo -e "${NEGRITO}12/14 - [ OK ] - Configurando Hostname para '${server_name}'...${RESET}"
+    hostnamectl set-hostname "$server_name"
+    sed -i "s/127.0.0.1[[:space:]]localhost/127.0.0.1 ${server_name}/g" /etc/hosts > /dev/null 2>&1
+
+    echo -e "${NEGRITO}13/14 - [ OK ] - Fazendo Update final...${RESET}"
+    apt-get update -qq
+    
+    echo -e "${NEGRITO}14/14 - [ OK ] - Instalando AppArmor...${RESET}"
+    apt-get install -y apparmor-utils -qq
+
+    msg_success "Sistema preparado e todas as dependências instaladas."
 }
 
-# 2. Instala o Docker Engine
-install_docker() {
-    msg_header "Instalando o Docker Engine"
-    if command_exists docker; then
+# 2. Instala o Docker e inicializa o Swarm
+install_docker_swarm() {
+    msg_header "Instalando Docker e Iniciando Swarm"
+
+    if ! command_exists docker; then
+        echo "Instalando Docker..."
+        curl -fsSL https://get.docker.com | bash > /dev/null 2>&1 || msg_error "Falha ao instalar o Docker."
+        systemctl enable docker > /dev/null 2>&1
+        systemctl start docker > /dev/null 2>&1
+        msg_success "Docker instalado."
+    else
         msg_success "Docker já está instalado."
+    fi
+
+    if docker info 2>/dev/null | grep -q "Swarm: active"; then
+        msg_success "Docker Swarm já está ativo."
         return
     fi
 
-    msg_warning "Docker não encontrado. Instalando agora..."
-    if ! curl -fsSL https://get.docker.com -o get-docker.sh; then
-        msg_error "Falha ao baixar o script de instalação do Docker."
+    echo "Iniciando Docker Swarm..."
+    local public_ip
+    public_ip=$(curl -s ifconfig.me)
+    if [ -z "$public_ip" ]; then
+        msg_error "Não foi possível obter o IP público da VPS."
     fi
+
+    local max_attempts=3
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        if docker swarm init --advertise-addr "$public_ip" > /dev/null 2>&1; then
+            msg_success "Docker Swarm iniciado com sucesso!"
+            return
+        else
+            msg_warning "Tentativa ${attempt} de ${max_attempts} para iniciar o Swarm falhou. A aguardar 5 segundos..."
+            attempt=$((attempt + 1))
+            sleep 5
+        fi
+    done
     
-    if ! sh get-docker.sh; then
-        msg_error "O script de instalação do Docker falhou."
-    fi
-    
-    rm get-docker.sh
-    msg_success "Docker Engine instalado com sucesso."
+    msg_error "Não foi possível iniciar o Docker Swarm após ${max_attempts} tentativas. Verifique a configuração de rede."
 }
 
-# 3. Instala o Docker Compose
-install_docker_compose() {
-    msg_header "Instalando o Docker Compose"
-    if command_exists docker-compose; then
-        msg_success "Docker Compose já está instalado."
-        return
-    fi
-    
-    msg_warning "Docker Compose não encontrado. Instalando agora..."
-    
-    # Encontra a última versão do Docker Compose
-    LATEST_COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep 'tag_name' | cut -d\" -f4)
-    if [ -z "$LATEST_COMPOSE_VERSION" ]; then
-        msg_error "Não foi possível obter a última versão do Docker Compose da API do GitHub."
-    fi
-    
-    DESTINATION="/usr/local/bin/docker-compose"
-    
-    # Baixa o binário
-    if ! curl -L "https://github.com/docker/compose/releases/download/${LATEST_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o "${DESTINATION}"; then
-        msg_error "Falha ao baixar o binário do Docker Compose."
-    fi
-    
-    # Torna o binário executável
-    if ! chmod +x "${DESTINATION}"; then
-        msg_error "Falha ao tornar o Docker Compose executável."
-    fi
-    
-    msg_success "Docker Compose ${LATEST_COMPOSE_VERSION} instalado com sucesso."
-}
-
-# 4. Clona ou atualiza o repositório de configuração
+# 3. Clona ou atualiza o repositório de configuração
 setup_repository() {
     msg_header "Configurando o Repositório de Instalação"
     
     if [ -d "$INSTALL_DIR" ]; then
         msg_warning "Diretório ${INSTALL_DIR} já existe. Atualizando..."
         cd "$INSTALL_DIR" || msg_error "Não foi possível acessar o diretório ${INSTALL_DIR}"
-        
-        # Garante que não haja conflitos locais que impeçam o pull
         git reset --hard HEAD >/dev/null 2>&1
-        
         if ! git pull; then
             msg_error "Falha ao atualizar o repositório com 'git pull'."
         fi
@@ -163,35 +146,28 @@ setup_repository() {
     fi
 }
 
-
 # === FUNÇÃO PRINCIPAL (MAIN) ===
 main() {
     clear
-    echo -e "${AZUL}${NEGRITO}🚀 Iniciando o Instalador Mestre Fluxer v3.0...${RESET}"
+    echo -e "${AZUL}${NEGRITO}🚀 Iniciando o Instalador Mestre Fluxer v5.0...${RESET}"
     
     prepare_system
-    install_docker
-    install_docker_compose
+    install_docker_swarm
     setup_repository
     
-    # Navega para o diretório de instalação
-    cd "$INSTALL_DIR" || msg_error "Diretório de instalação ${INSTALL_DIR} não encontrado após a configuração."
+    cd "$INSTALL_DIR" || msg_error "Diretório de instalação ${INSTALL_DIR} não encontrado."
     
-    # Verifica se o script de instalação principal existe
     if [ ! -f "$INSTALL_SCRIPT_NAME" ]; then
         msg_error "O script de instalação '${INSTALL_SCRIPT_NAME}' não foi encontrado no repositório."
     fi
     
     msg_header "Entregando para o Instalador do Ambiente Fluxer"
     echo "O ambiente está pronto. O script principal será executado agora."
-    echo "A partir deste ponto, o instalador fará perguntas sobre domínios e senhas."
     sleep 3
     
-    # Torna o script principal executável e o executa
     chmod +x "$INSTALL_SCRIPT_NAME"
     ./"$INSTALL_SCRIPT_NAME"
 }
 
 # --- PONTO DE ENTRADA DO SCRIPT ---
-# Chama a função principal para iniciar todo o processo.
 main

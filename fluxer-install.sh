@@ -5,7 +5,7 @@
 # Descrição: Implementa a lógica de instalação do SetupOrion,
 #            com drop/criação de bancos de dados para garantir ambiente limpo.
 # Autor: Humberley / Gemini
-# Versão: 13.4 (Final - Correção de Migração de DB)
+# Versão: 13.5 (UI e Instruções de DNS aprimoradas)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -949,7 +949,25 @@ main() {
     echo "██║     ███████╗ ╚██████╔╝██║  ██╗███████╗██║   ██     ███████║███████╗   ██║   ╚██████╔╝██║     "
     echo "╚═╝     ╚══════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝    ██     ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝     "
     echo -e "${RESET}"
-    echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS (v13.4)${RESET}"
+    echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS (v13.5)${RESET}"
+    echo -e "${AZUL}Criado por Humberley Cezilio${RESET}"
+    echo -e "${AZUL}Instagram: https://www.instagram.com/humberley${RESET}"
+    echo -e "${AZUL}Youtube: https://www.youtube.com/@Fluxer_ai${RESET}" # Nota: Link mantido conforme solicitado.
+
+    # --- INSTRUÇÕES DE DNS ---
+    msg_header "CONFIGURAÇÃO DE DNS (AÇÃO NECESSÁRIA)"
+    echo -e "${AMARELO}Antes de continuar, é ${NEGRITO}ESSENCIAL${AMARELO} que você configure um DNS na sua Cloudflare."
+    echo "Este script criará vários subdomínios (portainer, n8n, evo, etc)."
+    echo "Para que todos funcionem, você precisa criar uma entrada do tipo 'A' Curinga (Wildcard)."
+    echo ""
+    echo -e "Acesse sua conta na ${NEGRITO}Cloudflare${RESET} e crie a seguinte entrada de DNS:"
+    echo -e "  - ${NEGRITO}Tipo:${RESET}    A"
+    echo -e "  - ${NEGRITO}Nome:${RESET}     * (apenas o asterisco)"
+    echo -e "  - ${NEGRITO}Endereço IPv4:${RESET} $(curl -s ifconfig.me) (o IP desta VPS)"
+    echo -e "  - ${NEGRITO}Proxy:${RESET}    ${VERMELHO}Desativado${RESET} (DNS Only - a nuvem deve ser cinza)"
+    echo ""
+    read -p "Após configurar o DNS na Cloudflare, pressione [Enter] para continuar..." < /dev/tty
+
 
     # --- COLETA DE DADOS DO USUÁRIO COM VALIDAÇÃO ---
     msg_header "COLETANDO INFORMAÇÕES"
@@ -958,17 +976,20 @@ main() {
     while true; do echo -e "${AMARELO}--> A senha deve ter no mínimo 12 caracteres, com maiúsculas, minúsculas, números e especiais.${RESET}"; read -s -p "🔑 Digite uma senha para o Portainer: " PORTAINER_PASSWORD < /dev/tty; echo; if validate_password "$PORTAINER_PASSWORD"; then read -s -p "🔑 Confirme a senha do Portainer: " PORTAINER_PASSWORD_CONFIRM < /dev/tty; echo; if [[ "$PORTAINER_PASSWORD" == "$PORTAINER_PASSWORD_CONFIRM" ]]; then break; else msg_warning "As senhas não coincidem."; fi; fi; done
     while true; do read -p "👤 Utilizador root para o MinIO (sem espaços ou especiais): " MINIO_ROOT_USER < /dev/tty; if validate_simple_text "$MINIO_ROOT_USER"; then break; fi; done
     while true; do echo -e "${AMARELO}--> A senha do MinIO precisa ter no mínimo 8 caracteres.${RESET}"; read -s -p "🔑 Digite uma senha para o MinIO: " MINIO_ROOT_PASSWORD < /dev/tty; echo; if [ ${#MINIO_ROOT_PASSWORD} -ge 8 ]; then read -s -p "🔑 Confirme a senha do MinIO: " MINIO_ROOT_PASSWORD_CONFIRM < /dev/tty; echo; if [[ "$MINIO_ROOT_PASSWORD" == "$MINIO_ROOT_PASSWORD_CONFIRM" ]]; then break; else msg_warning "As senhas não coincidem."; fi; else msg_warning "A senha do MinIO precisa ter no mínimo 8 caracteres."; fi; done
+    
     msg_header "COLETANDO INFORMAÇÕES DE SMTP (para n8n e Typebot)"
-    while true; do read -p "📧 Utilizador SMTP (ex: seuemail@gmail.com): " SMTP_USER < /dev/tty; if validate_email "$SMTP_USER"; then break; fi; done
-    read -s -p "🔑 Senha SMTP (se for Gmail, use uma senha de aplicação): " SMTP_PASS < /dev/tty; echo
-    read -p "🌐 Host SMTP (ex: smtp.gmail.com): " SMTP_HOST < /dev/tty
-    read -p "🔢 Porta SMTP (ex: 587): " SMTP_PORT < /dev/tty
-    read -p "🔒 Usar SSL para SMTP? (true/false): " SMTP_SSL < /dev/tty
-
+    echo -e "${AZUL}As configurações de SMTP do Gmail serão usadas por padrão.${RESET}"
+    while true; do read -p "📧 Utilizador SMTP (seu e-mail do Gmail): " SMTP_USER < /dev/tty; if validate_email "$SMTP_USER"; then break; fi; done
+    read -s -p "🔑 Senha SMTP (use uma 'Senha de App' gerada no Google): " SMTP_PASS < /dev/tty; echo
+    
 
     # --- GERAÇÃO DE VARIÁVEIS E VERIFICAÇÃO DE DNS ---
     msg_header "GERANDO CONFIGURAÇÕES E VERIFICANDO DNS"
-    export DOMINIO_RAIZ LE_EMAIL PORTAINER_PASSWORD MINIO_ROOT_USER MINIO_ROOT_PASSWORD SMTP_USER SMTP_PASS SMTP_HOST SMTP_PORT SMTP_SSL
+    export DOMINIO_RAIZ LE_EMAIL PORTAINER_PASSWORD MINIO_ROOT_USER MINIO_ROOT_PASSWORD SMTP_USER SMTP_PASS
+    export SMTP_HOST="smtp.gmail.com"
+    export SMTP_PORT="587"
+    export SMTP_SSL="true"
+    
     export PORTAINER_DOMAIN="portainer.${DOMINIO_RAIZ}"
     export N8N_EDITOR_DOMAIN="n8n.${DOMINIO_RAIZ}"
     export N8N_WEBHOOK_DOMAIN="nwn.${DOMINIO_RAIZ}"
@@ -1065,7 +1086,7 @@ main() {
     # --- RESUMO FINAL ---
     msg_header "🎉 INSTALAÇÃO CONCLUÍDA 🎉"
     echo "Aguarde alguns minutos para que todos os serviços sejam iniciados."; echo "Pode verificar o estado no seu painel Portainer ou com o comando: ${NEGRITO}docker service ls${RESET}"; echo; echo "Abaixo estão os seus links de acesso:"; echo
-    echo -e "${NEGRITO}Painel Portainer:   https://${PORTAINER_DOMAIN}${RESET}"
+    echo -e "${NEGRITO}Painel Portainer:     https://${PORTAINER_DOMAIN}${RESET}"
     echo -e "${NEGRITO}Painel n8n (editor):  https://${N8N_EDITOR_DOMAIN}${RESET}"
     echo -e "${NEGRITO}Builder Typebot:      https://${TYPEBOT_EDITOR_DOMAIN}${RESET}"
     echo -e "${NEGRITO}MinIO Painel:         https://${MINIO_CONSOLE_DOMAIN}${RESET}"
@@ -1074,11 +1095,11 @@ main() {
     read -p "Deseja exibir as senhas e chaves geradas? (s/N): " SHOW_CREDS < /dev/tty
     if [[ "$SHOW_CREDS" =~ ^[Ss]$ ]]; then
         echo; msg_header "CREDENCIAS GERADAS (guarde em local seguro)"
-        echo -e "${NEGRITO}Senha do Portainer:      ${PORTAINER_PASSWORD}${RESET}"
-        echo -e "${NEGRITO}Utilizador root do MinIO:   ${MINIO_ROOT_USER}${RESET}"
-        echo -e "${NEGRITO}Senha root do MinIO:     ${MINIO_ROOT_PASSWORD}${RESET}"
-        echo -e "${NEGRITO}Chave da Evolution API:  ${EVOLUTION_API_KEY}${RESET}"
-        echo -e "${NEGRITO}Senha do Postgres:       ${POSTGRES_PASSWORD}${RESET}"
+        echo -e "${NEGRITO}Senha do Portainer:     ${PORTAINER_PASSWORD}${RESET}"
+        echo -e "${NEGRITO}Utilizador root do MinIO: ${MINIO_ROOT_USER}${RESET}"
+        echo -e "${NEGRITO}Senha root do MinIO:    ${MINIO_ROOT_PASSWORD}${RESET}"
+        echo -e "${NEGRITO}Chave da Evolution API: ${EVOLUTION_API_KEY}${RESET}"
+        echo -e "${NEGRITO}Senha do Postgres:      ${POSTGRES_PASSWORD}${RESET}"
     fi
     echo; msg_success "Tudo pronto! Aproveite o seu novo ambiente de automação."
 }

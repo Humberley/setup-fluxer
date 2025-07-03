@@ -5,7 +5,7 @@
 # Descrição: Implementa a lógica de instalação robusta do SetupOrion,
 #            incluindo preparação, deploy, verificação e configuração em etapas.
 # Autor: Humberley / [Seu Nome]
-# Versão: 11.5 (Corrige o parsing da resposta da API Key)
+# Versão: 11.6 (Corrige payload de deploy da API com SwarmID)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -147,6 +147,7 @@ deploy_stack_via_api() {
     local stack_name=$1
     local api_key=$2
     local portainer_domain=$3
+    local swarm_id=$4
     local endpoint_id=1
     local stacks_dir="stacks"
     local processed_dir="processed_stacks"
@@ -170,7 +171,8 @@ deploy_stack_via_api() {
     json_payload=$(jq -n \
         --arg name "$stack_name" \
         --arg content "$compose_content" \
-        '{Name: $name, StackFileContent: $content}')
+        --arg swarmID "$swarm_id" \
+        '{Name: $name, StackFileContent: $content, SwarmID: $swarmID}')
 
     local response
     response=$(curl -s -k -w "%{http_code}" -X POST \
@@ -337,12 +339,14 @@ EOL
 
     echo "A gerar chave de API..."; local apikey_response; apikey_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/users/${USER_ID}/tokens" -H "Authorization: Bearer ${PORTAINER_JWT}" -H "Content-Type: application/json" --data "{\"description\": \"fluxer_installer_key\", \"password\": \"${PORTAINER_PASSWORD}\"}"); local PORTAINER_API_KEY=$(echo "$apikey_response" | jq -r .rawAPIKey); if [[ -z "$PORTAINER_API_KEY" || "$PORTAINER_API_KEY" == "null" ]]; then msg_error "A resposta da API para criação da chave foi: $apikey_response"; msg_fatal "Falha ao gerar a chave de API."; fi; msg_success "Chave de API gerada!"
 
+    echo "Obtendo Swarm ID..."; local ENDPOINT_ID=1; local SWARM_ID; SWARM_ID=$(curl -s -k -H "X-API-Key: ${PORTAINER_API_KEY}" "https://${PORTAINER_DOMAIN}/api/endpoints/${ENDPOINT_ID}/docker/swarm" | jq -r .ID); if [[ -z "$SWARM_ID" || "$SWARM_ID" == "null" ]]; then msg_fatal "Falha ao obter o Swarm ID."; fi; msg_success "Swarm ID obtido: ${SWARM_ID}"
+
     # --- ETAPA 4: IMPLANTAR STACKS DE APLICAÇÃO VIA API ---
     msg_header "[4/4] IMPLANTANDO STACKS DE APLICAÇÃO"
     local PROCESSED_DIR="processed_stacks"; mkdir -p "$PROCESSED_DIR"
     local DEPLOY_ORDER_API=("redis" "postgres" "minio" "n8n" "typebot" "evolution")
     for stack_name in "${DEPLOY_ORDER_API[@]}"; do
-        deploy_stack_via_api "$stack_name" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN"
+        deploy_stack_via_api "$stack_name" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
     done
     rm -rf "$PROCESSED_DIR"
 

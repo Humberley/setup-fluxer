@@ -1,0 +1,105 @@
+version: "3.7"
+services:
+
+  typebot_builder:
+    image: baptistearno/typebot-builder:latest
+    networks:
+      - ${REDE_DOCKER}
+    environment:
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/typebot
+      - ENCRYPTION_SECRET=${TYPEBOT_ENCRYPTION_KEY}
+      - DEFAULT_WORKSPACE_PLAN=UNLIMITED
+
+      - NEXTAUTH_URL=https://${TYPEBOT_EDITOR_DOMAIN}
+      - NEXT_PUBLIC_VIEWER_URL=https://${TYPEBOT_VIEWER_DOMAIN}
+      - NEXTAUTH_URL_INTERNAL=http://localhost:3000
+
+      - DISABLE_SIGNUP=false
+
+      - ADMIN_EMAIL=${N8N_SMTP_USER}
+      - NEXT_PUBLIC_SMTP_FROM='Suporte' <${N8N_SMTP_USER}>
+      - SMTP_AUTH_DISABLED=false
+      - SMTP_USERNAME=${N8N_SMTP_USER}
+      - SMTP_PASSWORD=${N8N_SMTP_PASS}
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_PORT=587
+      - SMTP_SECURE=false
+
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_BUCKET=typebot
+      - S3_ENDPOINT=${MINIO_S3_DOMAIN}
+
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1024M
+      labels:
+        - io.portainer.accesscontrol.users=admin
+        - traefik.enable=true
+        - traefik.http.routers.typebot_builder.rule=Host(`${TYPEBOT_EDITOR_DOMAIN}`)
+        - traefik.http.routers.typebot_builder.entrypoints=websecure
+        - traefik.http.routers.typebot_builder.tls.certresolver=letsencryptresolver
+        - traefik.http.services.typebot_builder.loadbalancer.server.port=3000
+        - traefik.http.services.typebot_builder.loadbalancer.passHostHeader=true
+        - traefik.http.routers.typebot_builder.service=typebot_builder
+
+  typebot_viewer:
+    image: baptistearno/typebot-viewer:latest
+    networks:
+      - ${REDE_DOCKER}
+    environment:
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/typebot
+      - ENCRYPTION_SECRET=${TYPEBOT_ENCRYPTION_KEY}
+      - DEFAULT_WORKSPACE_PLAN=UNLIMITED
+
+      - NEXTAUTH_URL=https://${TYPEBOT_EDITOR_DOMAIN}
+      - NEXT_PUBLIC_VIEWER_URL=https://${TYPEBOT_VIEWER_DOMAIN}
+      - NEXTAUTH_URL_INTERNAL=http://localhost:3000
+
+      - DISABLE_SIGNUP=false
+
+      - ADMIN_EMAIL=${N8N_SMTP_USER}
+      - NEXT_PUBLIC_SMTP_FROM='Suporte' <${N8N_SMTP_USER}>
+      - SMTP_AUTH_DISABLED=false
+      - SMTP_USERNAME=${N8N_SMTP_USER}
+      - SMTP_PASSWORD=${N8N_SMTP_PASS}
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_PORT=587
+      - SMTP_SECURE=false
+
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_BUCKET=typebot
+      - S3_ENDPOINT=${MINIO_S3_DOMAIN}
+
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1024M
+      labels:
+        - io.portainer.accesscontrol.users=admin
+        - traefik.enable=true
+        - traefik.http.routers.typebot_viewer.rule=Host(`${TYPEBOT_VIEWER_DOMAIN}`)
+        - traefik.http.routers.typebot_viewer.entrypoints=websecure
+        - traefik.http.routers.typebot_viewer.tls.certresolver=letsencryptresolver
+        - traefik.http.services.typebot_viewer.loadbalancer.server.port=3000
+        - traefik.http.services.typebot_viewer.loadbalancer.passHostHeader=true
+        - traefik.http.routers.typebot_viewer.service=typebot_viewer
+
+networks:
+  ${REDE_DOCKER}:
+    external: true
+    name: ${REDE_DOCKER}

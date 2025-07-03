@@ -5,7 +5,7 @@
 # Descrição: Implementa a lógica de instalação do SetupOrion,
 #            com criação explícita de bancos de dados e correções de endpoint.
 # Autor: Humberley / Gemini
-# Versão: 13.2 (Final - Correção de DB e Endpoints)
+# Versão: 13.3 (Final - Evolution YML Atualizado)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -696,28 +696,27 @@ generate_evolution_yml() {
 cat << EOL
 version: "3.7"
 services:
-
   evolution:
-    image: atendai/evolution-api:latest
-
+    image: evoapicloud/evolution-api:latest
     volumes:
       - ${EVOLUTION_VOLUME}:/evolution/instances
-
     networks:
       - ${REDE_DOCKER}
-
     environment:
+      # Configurações Gerais
       - SERVER_URL=https://${EVOLUTION_DOMAIN}
       - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY}
       - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
       - DEL_INSTANCE=false
       - QRCODE_LIMIT=1902
       - LANGUAGE=pt-BR
-
-      - CONFIG_SESSION_PHONE_VERSION=2.3000.1015901307
+      
+      # Configuração do Cliente
+      - CONFIG_SESSION_PHONE_VERSION=2.3000.1023212226
       - CONFIG_SESSION_PHONE_CLIENT=OrionDesign
       - CONFIG_SESSION_PHONE_NAME=Chrome
-
+      
+      # Configuração do Banco de Dados
       - DATABASE_ENABLED=true
       - DATABASE_PROVIDER=postgresql
       - DATABASE_CONNECTION_URI=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/evolution
@@ -729,23 +728,30 @@ services:
       - DATABASE_SAVE_DATA_CHATS=true
       - DATABASE_SAVE_DATA_LABELS=true
       - DATABASE_SAVE_DATA_HISTORIC=true
-
+      
+      # Integrações
       - OPENAI_ENABLED=true
       - DIFY_ENABLED=true
       - TYPEBOT_ENABLED=true
       - TYPEBOT_API_VERSION=latest
-
+      - N8N_ENABLED=true
+      - EVOAI_ENABLED=true
+      
+      # Integração com Chatwoot
       - CHATWOOT_ENABLED=true
       - CHATWOOT_MESSAGE_READ=true
       - CHATWOOT_MESSAGE_DELETE=true
       - CHATWOOT_IMPORT_DATABASE_CONNECTION_URI=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/chatwoot?sslmode=disable
-
+      - CHATWOOT_IMPORT_PLACEHOLDER_MEDIA_MESSAGE=false
+      
+      # Configuração do Cache
       - CACHE_REDIS_ENABLED=true
-      - CACHE_REDIS_URI=redis://redis:6379
+      - CACHE_REDIS_URI=redis://redis:6379/8
       - CACHE_REDIS_PREFIX_KEY=evolution
-      - CACHE_REDIS_SAVE_INSTANCES=false
-      - CACHE_LOCAL_ENABLED=false
-
+      - CACHE_REDIS_SAVE_INSTANCES=true
+      - CACHE_LOCAL_ENABLED=true
+      
+      # Configuração do S3
       - S3_ENABLED=true
       - S3_ACCESS_KEY=${MINIO_ROOT_USER}
       - S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
@@ -753,39 +759,105 @@ services:
       - S3_PORT=443
       - S3_ENDPOINT=${MINIO_S3_DOMAIN}
       - S3_USE_SSL=true
+      - S3_REGION=eu-south
 
+      # Configuração do WhatsApp Business
       - WA_BUSINESS_TOKEN_WEBHOOK=evolution
       - WA_BUSINESS_URL=https://graph.facebook.com
-      - WA_BUSINESS_VERSION=v20.0
+      - WA_BUSINESS_VERSION=v21.0
       - WA_BUSINESS_LANGUAGE=pt_BR
 
+      # Telemetria
       - TELEMETRY=false
       - TELEMETRY_URL=
 
+      # Configuração do WebSocket
       - WEBSOCKET_ENABLED=false
       - WEBSOCKET_GLOBAL_EVENTS=false
 
+      # Configuração do SQS
       - SQS_ENABLED=false
       - SQS_ACCESS_KEY_ID=
       - SQS_SECRET_ACCESS_KEY=
       - SQS_ACCOUNT_ID=
       - SQS_REGION=
 
+      # Configuração do RabbitMQ
       - RABBITMQ_ENABLED=false
       - RABBITMQ_URI=amqp://USER:PASS@rabbitmq:5672/evolution
       - RABBITMQ_EXCHANGE_NAME=evolution
       - RABBITMQ_GLOBAL_ENABLED=false
       - RABBITMQ_EVENTS_APPLICATION_STARTUP=false
+      - RABBITMQ_EVENTS_INSTANCE_CREATE=false
+      - RABBITMQ_EVENTS_INSTANCE_DELETE=false
+      - RABBITMQ_EVENTS_QRCODE_UPDATED=false
+      - RABBITMQ_EVENTS_MESSAGES_SET=false
       - RABBITMQ_EVENTS_MESSAGES_UPSERT=true
+      - RABBITMQ_EVENTS_MESSAGES_EDITED=false
+      - RABBITMQ_EVENTS_MESSAGES_UPDATE=false
+      - RABBITMQ_EVENTS_MESSAGES_DELETE=false
+      - RABBITMQ_EVENTS_SEND_MESSAGE=false
+      - RABBITMQ_EVENTS_CONTACTS_SET=false
+      - RABBITMQ_EVENTS_CONTACTS_UPSERT=false
+      - RABBITMQ_EVENTS_CONTACTS_UPDATE=false
+      - RABBITMQ_EVENTS_PRESENCE_UPDATE=false
+      - RABBITMQ_EVENTS_CHATS_SET=false
+      - RABBITMQ_EVENTS_CHATS_UPSERT=false
+      - RABBITMQ_EVENTS_CHATS_UPDATE=false
+      - RABBITMQ_EVENTS_CHATS_DELETE=false
+      - RABBITMQ_EVENTS_GROUPS_UPSERT=false
+      - RABBITMQ_EVENTS_GROUP_UPDATE=false
+      - RABBITMQ_EVENTS_GROUP_PARTICIPANTS_UPDATE=false
       - RABBITMQ_EVENTS_CONNECTION_UPDATE=true
+      - RABBITMQ_EVENTS_CALL=false
+      - RABBITMQ_EVENTS_TYPEBOT_START=false
+      - RABBITMQ_EVENTS_TYPEBOT_CHANGE_STATUS=false
 
+      # Configuração do Webhook
       - WEBHOOK_GLOBAL_ENABLED=false
-
+      - WEBHOOK_GLOBAL_URL=false
+      - WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS=false
+      - WEBHOOK_EVENTS_APPLICATION_STARTUP=false
+      - WEBHOOK_EVENTS_QRCODE_UPDATED=false
+      - WEBHOOK_EVENTS_MESSAGES_SET=false
+      - WEBHOOK_EVENTS_MESSAGES_UPSERT=false
+      - WEBHOOK_EVENTS_MESSAGES_EDITED=false
+      - WEBHOOK_EVENTS_MESSAGES_UPDATE=false
+      - WEBHOOK_EVENTS_MESSAGES_DELETE=false
+      - WEBHOOK_EVENTS_SEND_MESSAGE=false
+      - WEBHOOK_EVENTS_CONTACTS_SET=false
+      - WEBHOOK_EVENTS_CONTACTS_UPSERT=false
+      - WEBHOOK_EVENTS_CONTACTS_UPDATE=false
+      - WEBHOOK_EVENTS_PRESENCE_UPDATE=false
+      - WEBHOOK_EVENTS_CHATS_SET=false
+      - WEBHOOK_EVENTS_CHATS_UPSERT=false
+      - WEBHOOK_EVENTS_CHATS_UPDATE=false
+      - WEBHOOK_EVENTS_CHATS_DELETE=false
+      - WEBHOOK_EVENTS_GROUPS_UPSERT=false
+      - WEBHOOK_EVENTS_GROUPS_UPDATE=false
+      - WEBHOOK_EVENTS_GROUP_PARTICIPANTS_UPDATE=false
+      - WEBHOOK_EVENTS_CONNECTION_UPDATE=false
+      - WEBHOOK_EVENTS_LABELS_EDIT=false
+      - WEBHOOK_EVENTS_LABELS_ASSOCIATION=false
+      - WEBHOOK_EVENTS_CALL=false
+      - WEBHOOK_EVENTS_TYPEBOT_START=false
+      - WEBHOOK_EVENTS_TYPEBOT_CHANGE_STATUS=false
+      - WEBHOOK_EVENTS_ERRORS=false
+      - WEBHOOK_EVENTS_ERRORS_WEBHOOK=
+      - WEBHOOK_REQUEST_TIMEOUT_MS=60000
+      - WEBHOOK_RETRY_MAX_ATTEMPTS=10
+      - WEBHOOK_RETRY_INITIAL_DELAY_SECONDS=5
+      - WEBHOOK_RETRY_USE_EXPONENTIAL_BACKOFF=true
+      - WEBHOOK_RETRY_MAX_DELAY_SECONDS=300
+      - WEBHOOK_RETRY_JITTER_FACTOR=0.2
+      - WEBHOOK_RETRY_NON_RETRYABLE_STATUS_CODES=400,401,403,404,422
+      
+      # Configuração do Provider
       - PROVIDER_ENABLED=false
       - PROVIDER_HOST=127.0.0.1
       - PROVIDER_PORT=5656
       - PROVIDER_PREFIX=evolution
-
+      
     deploy:
       mode: replicated
       replicas: 1
@@ -874,7 +946,7 @@ main() {
     echo "██║     ███████╗ ╚██████╔╝██║  ██╗███████╗██║   ██     ███████║███████╗   ██║   ╚██████╔╝██║     "
     echo "╚═╝     ╚══════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝    ██     ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝     "
     echo -e "${RESET}"
-    echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS (v13.2)${RESET}"
+    echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS (v13.3)${RESET}"
 
     # --- COLETA DE DADOS DO USUÁRIO COM VALIDAÇÃO ---
     msg_header "COLETANDO INFORMAÇÕES"

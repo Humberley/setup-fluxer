@@ -158,8 +158,7 @@ deploy_stack_via_api() {
     json_payload=$(jq -n \
         --arg name "$stack_name" \
         --arg content "$compose_content" \
-        --arg swarmID "$swarm_id" \
-        '{Name: $name, StackFileContent: $content, SwarmID: $swarmID}')
+        '{Name: $name, StackFileContent: $content, SwarmID: "'"$swarm_id"'"}' )
 
     local response
     response=$(curl -s -k -w "\n%{http_code}" -X POST \

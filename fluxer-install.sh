@@ -5,7 +5,7 @@
 # Descrição: Coleta as informações do usuário, prepara o ambiente Docker Swarm
 #            e inicia cada serviço como uma stack individual, em ordem.
 # Autor: Humberley / [Seu Nome]
-# Versão: 4.0 (Solução Definitiva com Docker Swarm)
+# Versão: 4.1 (Solução Definitiva com Rede Robusta)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -139,8 +139,13 @@ main() {
     # --- PREPARAÇÃO DO AMBIENTE SWARM ---
     msg_header "PREPARANDO O AMBIENTE SWARM"
     
-    echo "Criando a rede Docker overlay (se não existir)..."
-    docker network create --driver=overlay --attachable "$REDE_DOCKER" >/dev/null 2>&1
+    echo "Garantindo a existência da rede Docker overlay '${REDE_DOCKER}'..."
+    # Remove a rede se ela existir, para garantir que podemos criá-la com o tipo correto.
+    docker network rm "$REDE_DOCKER" >/dev/null 2>&1
+    # Cria a rede com o driver overlay, essencial para o Swarm.
+    if ! docker network create --driver=overlay --attachable "$REDE_DOCKER"; then
+        msg_error "Falha ao criar a rede overlay '${REDE_DOCKER}'."
+    fi
     msg_success "Rede '${REDE_DOCKER}' pronta."
 
     echo "Criando os volumes Docker (se não existirem)..."

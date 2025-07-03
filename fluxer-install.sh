@@ -5,7 +5,7 @@
 # Descrição: Implementa a lógica de instalação robusta do SetupOrion,
 #            incluindo preparação, deploy, verificação e configuração em etapas.
 # Autor: Humberley / [Seu Nome]
-# Versão: 11.4 (Corrige payload de criação da chave de API com senha)
+# Versão: 11.5 (Corrige o parsing da resposta da API Key)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -335,7 +335,7 @@ EOL
     
     echo "Decodificando token para obter o ID do utilizador..."; local USER_ID; USER_ID=$(echo "$PORTAINER_JWT" | cut -d. -f2 | base64 --decode 2>/dev/null | jq -r .id); if [[ -z "$USER_ID" || "$USER_ID" == "null" ]]; then msg_fatal "Falha ao extrair o ID do utilizador do token JWT."; fi; msg_success "ID do utilizador 'admin' é: ${USER_ID}"
 
-    echo "A gerar chave de API..."; local apikey_response; apikey_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/users/${USER_ID}/tokens" -H "Authorization: Bearer ${PORTAINER_JWT}" -H "Content-Type: application/json" --data "{\"description\": \"fluxer_installer_key\", \"password\": \"${PORTAINER_PASSWORD}\"}"); local PORTAINER_API_KEY=$(echo "$apikey_response" | jq -r .raw); if [[ -z "$PORTAINER_API_KEY" || "$PORTAINER_API_KEY" == "null" ]]; then msg_error "A resposta da API para criação da chave foi: $apikey_response"; msg_fatal "Falha ao gerar a chave de API."; fi; msg_success "Chave de API gerada!"
+    echo "A gerar chave de API..."; local apikey_response; apikey_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/users/${USER_ID}/tokens" -H "Authorization: Bearer ${PORTAINER_JWT}" -H "Content-Type: application/json" --data "{\"description\": \"fluxer_installer_key\", \"password\": \"${PORTAINER_PASSWORD}\"}"); local PORTAINER_API_KEY=$(echo "$apikey_response" | jq -r .rawAPIKey); if [[ -z "$PORTAINER_API_KEY" || "$PORTAINER_API_KEY" == "null" ]]; then msg_error "A resposta da API para criação da chave foi: $apikey_response"; msg_fatal "Falha ao gerar a chave de API."; fi; msg_success "Chave de API gerada!"
 
     # --- ETAPA 4: IMPLANTAR STACKS DE APLICAÇÃO VIA API ---
     msg_header "[4/4] IMPLANTANDO STACKS DE APLICAÇÃO"

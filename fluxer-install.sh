@@ -5,7 +5,7 @@
 # Descrição: Coleta as informações do usuário, gera o .env e inicia cada
 #            serviço como uma stack individual no Docker Swarm.
 # Autor: Humberley / [Seu Nome]
-# Versão: 3.2 (Corrige erro de sintaxe YML)
+# Versão: 3.3 (Corrige erro de sintaxe YML)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -152,14 +152,17 @@ main() {
     for file in $(find "$STACKS_DIR" -type f -name "*.template.yml"); do
         # O Docker Swarm não precisa das definições de volumes/redes externas
         # nos ficheiros de compose se eles já existem.
-        # Esta etapa remove essas secções para evitar erros de sintaxe com variáveis.
+        # Esta etapa remove essas secções para evitar erros de sintaxe.
         echo "Adaptando o ficheiro: ${file}..."
         tmp_file=$(mktemp)
-        # Usa awk para remover as secções de topo 'volumes:' e 'networks:'
+        # Usa awk para remover as secções de topo 'volumes:' e 'networks:' de forma robusta
         awk '
-            /^volumes:|^networks:/ { in_block=1; next }
-            in_block && !/^[ \t]/ { in_block=0 }
-            !in_block { print }
+            # Se encontrarmos uma chave de topo "volumes:" ou "networks:", ativamos o modo de saltar
+            /^volumes:|^networks:/ { skip=1; next }
+            # Se estivermos a saltar e encontrarmos uma linha que NÃO está indentada, paramos de saltar
+            skip && !/^[ \t]/ { skip=0 }
+            # Se não estivermos a saltar, imprimimos a linha
+            !skip { print }
         ' "$file" > "$tmp_file"
         mv "$tmp_file" "$file"
     done

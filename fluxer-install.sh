@@ -5,7 +5,7 @@
 # Descrição: Implementa a lógica de instalação robusta do SetupOrion,
 #            incluindo preparação, deploy, verificação e configuração em etapas.
 # Autor: Humberley / [Seu Nome]
-# Versão: 11.0 (Instalação completa do ecossistema)
+# Versão: 11.1 (Corrige sintaxe YAML do Traefik)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -245,53 +245,98 @@ main() {
 
     # --- ETAPA 1: INSTALAR TRAEFIK E PORTAINER ---
     msg_header "[1/4] INSTALANDO TRAEFIK E PORTAINER"
-    # ... (código para deploy do traefik e portainer) ...
-    echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}..."; cat > /tmp/traefik.yml << EOL
+    
+    # --- Deploy Traefik ---
+    echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}..."
+    cat > /tmp/traefik.yml << EOL
 version: "3.7"
 services:
   traefik:
     image: traefik:v3.0
     command:
-      - "--api.dashboard=true"; - "--providers.swarm=true"; - "--providers.docker.endpoint=unix:///var/run/docker.sock"; - "--providers.docker.exposedbydefault=false"; - "--providers.docker.network=${REDE_DOCKER}"; - "--entrypoints.web.address=:80"; - "--entrypoints.websecure.address=:443"; - "--entrypoints.web.http.redirections.entrypoint.to=websecure"; - "--entrypoints.web.http.redirections.entrypoint.scheme=https"; - "--certificatesresolvers.letsencryptresolver.acme.email=${LE_EMAIL}"; - "--certificatesresolvers.letsencryptresolver.acme.storage=/etc/traefik/letsencrypt/acme.json"; - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge=true"; - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge.entrypoint=web"; - "--log.level=DEBUG"; - "--log.filePath=/var/log/traefik/traefik.log"; - "--accesslog=true"; - "--accesslog.filepath=/var/log/traefik/access.log"
-    ports: [ "80:80", "443:443" ]
-    volumes: [ "volume_swarm_certificates:/etc/traefik/letsencrypt", "/var/run/docker.sock:/var/run/docker.sock:ro", "volume_swarm_shared:/var/log/traefik" ]
-    networks: [ ${REDE_DOCKER} ]
+      - "--api.dashboard=true"
+      - "--providers.swarm=true"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=${REDE_DOCKER}"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--certificatesresolvers.letsencryptresolver.acme.email=${LE_EMAIL}"
+      - "--certificatesresolvers.letsencryptresolver.acme.storage=/etc/traefik/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge.entrypoint=web"
+      - "--log.level=DEBUG"
+      - "--log.filePath=/var/log/traefik/traefik.log"
+      - "--accesslog=true"
+      - "--accesslog.filepath=/var/log/traefik/access.log"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "volume_swarm_certificates:/etc/traefik/letsencrypt"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "volume_swarm_shared:/var/log/traefik"
+    networks:
+      - ${REDE_DOCKER}
     deploy:
       placement:
-        constraints: [ "node.role == manager" ]
+        constraints:
+          - node.role == manager
 networks:
   ${REDE_DOCKER}:
     external: true
-    name: ${REDE_DOCKER}
 volumes:
-  volume_swarm_certificates: { external: true }
-  volume_swarm_shared: { external: true }
+  volume_swarm_certificates:
+    external: true
+  volume_swarm_shared:
+    external: true
 EOL
-    docker stack deploy --compose-file /tmp/traefik.yml traefik || msg_fatal "Falha ao implantar Traefik."; msg_success "Stack 'traefik' implantado."; rm /tmp/traefik.yml
+    docker stack deploy --compose-file /tmp/traefik.yml traefik || msg_fatal "Falha ao implantar Traefik."
+    msg_success "Stack 'traefik' implantado."
+    rm /tmp/traefik.yml
+
+    # --- Deploy Portainer ---
     echo "---"; echo "Implantando: ${NEGRITO}portainer${RESET}..."; cat > /tmp/portainer.yml << EOL
 version: "3.7"
 services:
   agent:
     image: portainer/agent:latest
-    volumes: [ "/var/run/docker.sock:/var/run/docker.sock", "/var/lib/docker/volumes:/var/lib/docker/volumes" ]
-    networks: [ ${REDE_DOCKER} ]
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "/var/lib/docker/volumes:/var/lib/docker/volumes"
+    networks:
+      - ${REDE_DOCKER}
     deploy:
       mode: global
-      placement: { constraints: [node.platform.os == linux] }
+      placement:
+        constraints: [node.platform.os == linux]
   portainer:
     image: portainer/portainer-ce:latest
     command: -H tcp://tasks.agent:9001 --tlsskipverify
-    volumes: [ "portainer_data:/data" ]
-    networks: [ ${REDE_DOCKER} ]
+    volumes:
+      - "portainer_data:/data"
+    networks:
+      - ${REDE_DOCKER}
     deploy:
       mode: replicated
       replicas: 1
-      placement: { constraints: [node.role == manager] }
-      labels: [ "traefik.enable=true", "traefik.http.routers.portainer.rule=Host(\`${PORTAINER_DOMAIN}\`)", "traefik.http.routers.portainer.entrypoints=websecure", "traefik.http.routers.portainer.tls.certresolver=letsencryptresolver", "traefik.http.services.portainer.loadbalancer.server.port=9000", "traefik.docker.network=${REDE_DOCKER}" ]
+      placement:
+        constraints: [node.role == manager]
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.portainer.rule=Host(\`${PORTAINER_DOMAIN}\`)"
+        - "traefik.http.routers.portainer.entrypoints=websecure"
+        - "traefik.http.routers.portainer.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+        - "traefik.docker.network=${REDE_DOCKER}"
 volumes:
-  portainer_data: { external: true, name: portainer_data }
+  portainer_data:
+    external: true
 networks:
-  ${REDE_DOCKER}: { external: true, name: ${REDE_DOCKER} }
+  ${REDE_DOCKER}:
+    external: true
 EOL
     docker stack deploy --compose-file /tmp/portainer.yml portainer || msg_fatal "Falha ao implantar Portainer."; msg_success "Stack 'portainer' implantado."; rm /tmp/portainer.yml
 

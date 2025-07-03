@@ -5,7 +5,7 @@
 # Descrição: Implementa a lógica de instalação robusta do SetupOrion,
 #            incluindo preparação, deploy, verificação e configuração em etapas.
 # Autor: Humberley / [Seu Nome]
-# Versão: 10.2 (Corrige a geração de YAML)
+# Versão: 10.4 (Usa a configuração Traefik v3 fornecida)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -176,7 +176,7 @@ main() {
 version: "3.7"
 services:
   traefik:
-    image: traefik:v2.11
+    image: traefik:v3.0 # Atualizado para v3 como no exemplo do Orion
     command:
       - "--api.dashboard=true"
       - "--providers.docker.swarmMode=true"
@@ -189,13 +189,17 @@ services:
       - "--certificatesresolvers.letsencryptresolver.acme.storage=/letsencrypt/acme.json"
       - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge=true"
       - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge.entrypoint=web"
-      - "--log.level=ERROR"
+      - "--log.level=DEBUG"
+      - "--log.filePath=/var/log/traefik/traefik.log"
+      - "--accesslog=true"
+      - "--accesslog.filepath=/var/log/traefik/access.log"
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - "volume_swarm_certificates:/letsencrypt"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "volume_swarm_shared:/var/log/traefik"
     networks:
       - ${REDE_DOCKER}
     deploy:
@@ -211,7 +215,8 @@ networks:
 volumes:
   volume_swarm_certificates:
     external: true
-    name: volume_swarm_certificates
+  volume_swarm_shared:
+    external: true
 EOL
     docker stack deploy --compose-file /tmp/traefik.yml traefik || msg_fatal "Falha ao implantar Traefik."
     msg_success "Stack 'traefik' implantado."
@@ -281,18 +286,27 @@ EOL
     local account_created=false
     for i in $(seq 1 $max_retries); do
         local init_response
-        init_response=$(curl -s -k -w "%{http_code}" -X POST "https://${PORTAINER_DOMAIN}/api/users/admin/init" \
+        init_response=$(curl -s -k -w "\n%{http_code}" -X POST "https://${PORTAINER_DOMAIN}/api/users/admin/init" \
             -H "Content-Type: application/json" \
             --data "{\"Password\": \"${PORTAINER_PASSWORD}\"}")
         
-        local http_code=${init_response: -3}
+        local http_code
+        http_code=$(tail -n1 <<< "$init_response")
+        local response_body
+        response_body=$(sed '$ d' <<< "$init_response")
         
         if [[ "$http_code" == "200" ]]; then
             msg_success "Utilizador 'admin' do Portainer criado com sucesso!"
             account_created=true
             break
         else
-            echo "Tentativa ${i}/${max_retries} falhou. A aguardar 15 segundos..."
+            msg_warning "Tentativa ${i}/${max_retries} falhou."
+            echo "Código HTTP retornado: ${http_code}"
+            echo "Resposta da API: ${response_body}"
+            echo -e "${AMARELO}--- Logs do Traefik (últimos 30s) ---${RESET}"
+            docker service logs --tail 20 --since 30s traefik_traefik
+            echo -e "${AMARELO}-------------------------------------${RESET}"
+            echo "A aguardar 15 segundos antes de tentar novamente..."
             sleep 15
         fi
     done

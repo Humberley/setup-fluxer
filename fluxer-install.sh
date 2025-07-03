@@ -5,7 +5,7 @@
 # Descrição: Coleta as informações do usuário, junta os ficheiros .yml,
 #            gera o .env e inicia os serviços Docker.
 # Autor: Humberley / [Seu Nome]
-# Versão: 2.2 (Junta ficheiros YML)
+# Versão: 2.3 (Corrige erro de junção de YML)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -31,7 +31,7 @@ msg_error() {
     exit 1
 }
 
-# === NOVA FUNÇÃO PARA JUNTAR OS FICHEIROS YML ===
+# === FUNÇÃO PARA JUNTAR OS FICHEIROS YML (CORRIGIDA) ===
 build_compose_file() {
     msg_header "CONSTRUINDO O FICHEIRO DOCKER-COMPOSE.YML"
     
@@ -59,8 +59,11 @@ build_compose_file() {
         # Adiciona um comentário para indicar de onde veio o bloco de código
         echo "" >> "$OUTPUT_FILE"
         echo "# --- Bloco de: $(basename "$file") ---" >> "$OUTPUT_FILE"
-        # Adiciona o conteúdo do template, indentando corretamente
-        sed 's/^/  /' "$file" >> "$OUTPUT_FILE"
+        
+        # CORREÇÃO: Filtra as chaves 'version:' e 'services:' dos templates
+        # para evitar duplicação e depois indenta o resto do conteúdo.
+        grep -v -E '^\s*version:|^\s*services:' "$file" | sed 's/^/  /' >> "$OUTPUT_FILE"
+        
         echo "" >> "$OUTPUT_FILE"
     done
 
@@ -160,7 +163,7 @@ main() {
     # --- CRIAÇÃO DO FICHEIRO .ENV ---
     echo "Criando o ficheiro de configuração .env..."
     cat > .env <<EOF
-# Gerado por Fluxer Installer v2.2 em $(date)
+# Gerado por Fluxer Installer v2.3 em $(date)
 
 # --- GERAL ---
 REDE_DOCKER=fluxerNet

@@ -170,17 +170,17 @@ main() {
     # --- ETAPA 1: INSTALAR TRAEFIK E PORTAINER ---
     msg_header "[1/3] INSTALANDO TRAEFIK E PORTAINER"
     
-    # --- Deploy Traefik ---
-    echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}..."
-    cat > /tmp/traefik.yml << EOL
+   # --- Deploy Traefik ---
+echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}..."
+cat > /tmp/traefik.yml << EOL
 version: "3.7"
 services:
   traefik:
-    image: traefik:v3.0 # Atualizado para v3 como no exemplo do Orion
+    image: traefik:v3.0
     command:
       - "--api.dashboard=true"
-      - "--providers.docker.swarmMode=true"
-      - "--providers.docker.exposedbydefault=false"
+      - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
+      - "--providers.swarm.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
@@ -189,7 +189,7 @@ services:
       - "--certificatesresolvers.letsencryptresolver.acme.storage=/letsencrypt/acme.json"
       - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge=true"
       - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge.entrypoint=web"
-      - "--log.level=DEBUG"
+      - "--log.level=INFO"
       - "--log.filePath=/var/log/traefik/traefik.log"
       - "--accesslog=true"
       - "--accesslog.filepath=/var/log/traefik/access.log"
@@ -206,6 +206,15 @@ services:
       placement:
         constraints:
           - node.role == manager
+      labels:
+        # Dashboard do Traefik (opcional - descomente se quiser acesso web)
+        # - "traefik.enable=true"
+        # - "traefik.http.routers.traefik.rule=Host(\`traefik.${DOMINIO_RAIZ}\`)"
+        # - "traefik.http.routers.traefik.entrypoints=websecure"
+        # - "traefik.http.routers.traefik.tls.certresolver=letsencryptresolver"
+        # - "traefik.http.routers.traefik.service=api@internal"
+        # - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+        # - "traefik.docker.network=${REDE_DOCKER}"
 
 networks:
   ${REDE_DOCKER}:
@@ -218,9 +227,6 @@ volumes:
   volume_swarm_shared:
     external: true
 EOL
-    docker stack deploy --compose-file /tmp/traefik.yml traefik || msg_fatal "Falha ao implantar Traefik."
-    msg_success "Stack 'traefik' implantado."
-    rm /tmp/traefik.yml
 
     # --- Deploy Portainer ---
     echo "---"; echo "Implantando: ${NEGRITO}portainer${RESET}..."

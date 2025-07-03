@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #-------------------------------------------------------------------------------
-# Script: Instalador de Ambiente Fluxer (Corrigido v6)
+# Script: Instalador de Ambiente Fluxer (Corrigido v8)
 # Descrição: Implementa a lógica de instalação do SetupOrion,
 #            com drop/criação de bancos de dados para garantir ambiente limpo.
 # Autor: Humberley / Gemini
@@ -430,11 +430,11 @@ services:
 
       - NODE_ENV=production
       - EXECUTIONS_MODE=queue
-      - EXECUTIONS_TIMEOUT=3600 # Adicionado: Timeout para execuções
-      - EXECUTIONS_TIMEOUT_MAX=7200 # Adicionado: Timeout máximo para execuções
+      - EXECUTIONS_TIMEOUT=3600
+      - EXECUTIONS_TIMEOUT_MAX=7200
       - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
       - N8N_RUNNERS_ENABLED=true
-      - N8N_RUNNERS_MODE=internal # Adicionado: Modo de execução dos runners
+      - N8N_RUNNERS_MODE=internal
 
       - N8N_REINSTALL_MISSING_PACKAGES=true
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
@@ -452,16 +452,16 @@ services:
       - QUEUE_BULL_REDIS_PORT=6379
       - QUEUE_BULL_REDIS_DB=2
 
-      - N8N_METRICS=true # Adicionado: Habilita métricas
+      - N8N_METRICS=true
 
       - EXECUTIONS_DATA_PRUNE=true
       - EXECUTIONS_DATA_MAX_AGE=336
 
-      - N8N_AI_ENABLED=false # Adicionado: Desabilita recursos de IA
-      - N8N_AI_PROVIDER=openai # Adicionado: Provedor de IA (mesmo desabilitado)
-      - N8N_AI_OPENAI_API_KEY= # Adicionado: Chave da API de IA (mesmo desabilitado)
+      - N8N_AI_ENABLED=false
+      - N8N_AI_PROVIDER=openai
+      - N8N_AI_OPENAI_API_KEY=
 
-      - NODE_FUNCTION_ALLOW_BUILTIN=* # Adicionado: Permite módulos built-in em funções personalizadas
+      - NODE_FUNCTION_ALLOW_BUILTIN=*
       - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash
 
       - GENERIC_TIMEZONE=America/Sao_Paulo
@@ -507,11 +507,11 @@ services:
 
       - NODE_ENV=production
       - EXECUTIONS_MODE=queue
-      - EXECUTIONS_TIMEOUT=3600 # Adicionado: Timeout para execuções
-      - EXECUTIONS_TIMEOUT_MAX=7200 # Adicionado: Timeout máximo para execuções
+      - EXECUTIONS_TIMEOUT=3600
+      - EXECUTIONS_TIMEOUT_MAX=7200
       - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
       - N8N_RUNNERS_ENABLED=true
-      - N8N_RUNNERS_MODE=internal # Adicionado: Modo de execução dos runners
+      - N8N_RUNNERS_MODE=internal
 
       - N8N_REINSTALL_MISSING_PACKAGES=true
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
@@ -529,16 +529,16 @@ services:
       - QUEUE_BULL_REDIS_PORT=6379
       - QUEUE_BULL_REDIS_DB=2
 
-      - N8N_METRICS=true # Adicionado: Habilita métricas
+      - N8N_METRICS=true
 
       - EXECUTIONS_DATA_PRUNE=true
       - EXECUTIONS_DATA_MAX_AGE=336
 
-      - N8N_AI_ENABLED=false # Adicionado: Desabilita recursos de IA
-      - N8N_AI_PROVIDER=openai # Adicionado: Provedor de IA (mesmo desabilitado)
-      - N8N_AI_OPENAI_API_KEY= # Adicionado: Chave da API de IA (mesmo desabilitado)
+      - N8N_AI_ENABLED=false
+      - N8N_AI_PROVIDER=openai
+      - N8N_AI_OPENAI_API_KEY=
 
-      - NODE_FUNCTION_ALLOW_BUILTIN=* # Adicionado: Permite módulos built-in em funções personalizadas
+      - NODE_FUNCTION_ALLOW_BUILTIN=*
       - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash
 
       - GENERIC_TIMEZONE=America/Sao_Paulo
@@ -584,11 +584,11 @@ services:
 
       - NODE_ENV=production
       - EXECUTIONS_MODE=queue
-      - EXECUTIONS_TIMEOUT=3600 # Adicionado: Timeout para execuções
-      - EXECUTIONS_TIMEOUT_MAX=7200 # Adicionado: Timeout máximo para execuções
+      - EXECUTIONS_TIMEOUT=3600
+      - EXECUTIONS_TIMEOUT_MAX=7200
       - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
       - N8N_RUNNERS_ENABLED=true
-      - N8N_RUNNERS_MODE=internal # Adicionado: Modo de execução dos runners
+      - N8N_RUNNERS_MODE=internal
 
       - N8N_REINSTALL_MISSING_PACKAGES=true
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
@@ -606,16 +606,16 @@ services:
       - QUEUE_BULL_REDIS_PORT=6379
       - QUEUE_BULL_REDIS_DB=2
 
-      - N8N_METRICS=true # Adicionado: Habilita métricas
+      - N8N_METRICS=true
 
       - EXECUTIONS_DATA_PRUNE=true
       - EXECUTIONS_DATA_MAX_AGE=336
 
-      - N8N_AI_ENABLED=false # Adicionado: Desabilita recursos de IA
-      - N8N_AI_PROVIDER=openai # Adicionado: Provedor de IA (mesmo desabilitado)
-      - N8N_AI_OPENAI_API_KEY= # Adicionado: Chave da API de IA (mesmo desabilitado)
+      - N8N_AI_ENABLED=false
+      - N8N_AI_PROVIDER=openai
+      - N8N_AI_OPENAI_API_KEY=
 
-      - NODE_FUNCTION_ALLOW_BUILTIN=* # Adicionado: Permite módulos built-in em funções personalizadas
+      - NODE_FUNCTION_ALLOW_BUILTIN=*
       - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash
 
       - GENERIC_TIMEZONE=America/Sao_Paulo
@@ -942,6 +942,95 @@ networks:
 EOL
 }
 
+# Gera um Docker Compose YAML contendo apenas o serviço n8n_editor
+generate_n8n_editor_only_yml() {
+cat << EOL
+version: "3.7"
+services:
+  n8n_editor:
+    image: n8nio/n8n:latest
+    command: start
+    networks:
+      - ${REDE_DOCKER}
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_DATABASE=n8n_queue
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_USER=postgres
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_HOST=${N8N_EDITOR_DOMAIN}
+      - N8N_EDITOR_BASE_URL=https://${N8N_EDITOR_DOMAIN}/
+      - WEBHOOK_URL=https://${N8N_WEBHOOK_DOMAIN}/
+      - N8N_PROTOCOL=https
+
+      - NODE_ENV=production
+      - EXECUTIONS_MODE=queue
+      - EXECUTIONS_TIMEOUT=3600
+      - EXECUTIONS_TIMEOUT_MAX=7200
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
+      - N8N_RUNNERS_ENABLED=true
+      - N8N_RUNNERS_MODE=internal
+
+      - N8N_REINSTALL_MISSING_PACKAGES=true
+      - N8N_COMMUNITY_PACKAGES_ENABLED=true
+      - N8N_NODE_PATH=/home/node/.n8n/nodes
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+
+      - N8N_SMTP_SENDER=${SMTP_USER}
+      - N8N_SMTP_USER=${SMTP_USER}
+      - N8N_SMTP_PASS=${SMTP_PASS}
+      - N8N_SMTP_HOST=${SMTP_HOST}
+      - N8N_SMTP_PORT=${SMTP_PORT}
+      - N8N_SMTP_SSL=${SMTP_SSL}
+
+      - QUEUE_BULL_REDIS_HOST=redis
+      - QUEUE_BULL_REDIS_PORT=6379
+      - QUEUE_BULL_REDIS_DB=2
+
+      - N8N_METRICS=true
+
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=336
+
+      - N8N_AI_ENABLED=false
+      - N8N_AI_PROVIDER=openai
+      - N8N_AI_OPENAI_API_KEY=
+
+      - NODE_FUNCTION_ALLOW_BUILTIN=*
+      - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash
+
+      - GENERIC_TIMEZONE=America/Sao_Paulo
+      - TZ=America/Sao_Paulo
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1024M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.n8n_editor.rule=Host(\`${N8N_EDITOR_DOMAIN}\`)"
+        - "traefik.http.routers.n8n_editor.entrypoints=websecure"
+        - "traefik.http.routers.n8n_editor.priority=1"
+        - "traefik.http.routers.n8n_editor.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.n8n_editor.service=n8n_editor"
+        - "traefik.http.services.n8n_editor.loadbalancer.server.port=5678"
+        - "traefik.http.services.n8n_editor.loadbalancer.passHostHeader=1"
+networks:
+  ${REDE_DOCKER}:
+    external: true
+    name: ${REDE_DOCKER}
+EOL
+}
+
+
 # Nova função para criar os bancos de dados
 create_databases() {
     msg_header "REDEFININDO BANCOS DE DADOS NO POSTGRES"
@@ -1081,9 +1170,11 @@ main() {
     echo "Criando os volumes Docker...";
     
     # Remover o stack do Postgres e o volume para garantir um ambiente limpo
-    echo "Removendo stacks antigos do n8n (se existirem)..."
+    echo "Removendo stacks antigos de aplicação (n8n, typebot, evolution) para garantir ambiente limpo..."
     docker stack rm n8n >/dev/null 2>&1
-    sleep 10 # Aguarda a remoção do stack do n8n
+    docker stack rm typebot >/dev/null 2>&1
+    docker stack rm evolution >/dev/null 2>&1
+    sleep 15 # Aumenta a pausa para o swarm processar a remoção de todos os stacks de aplicação
     
     echo "Removendo stack 'postgres' e volume '${POSTGRES_VOLUME}' para garantir ambiente limpo...";
     docker stack rm postgres >/dev/null 2>&1 # Remover o stack postgres
@@ -1156,9 +1247,19 @@ main() {
     echo "Aguardando 30 segundos antes de implantar as aplicações para garantir a estabilidade da infraestrutura..."
     sleep 30 # Aumenta o atraso antes de implantar as aplicações
 
-    # Agora, e somente agora, subimos o stack do n8n
+    # Estratégia: Implantar apenas o n8n_editor para rodar as migrations primeiro
+    msg_header "IMPLANTANDO N8N EDITOR PARA MIGRATIONS"
+    deploy_stack_via_api "n8n-migrations" "$(generate_n8n_editor_only_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
+    wait_stack "n8n-migrations" "n8n_editor" # Espera o editor estar online
+    echo "N8n editor online. Aguardando 90 segundos para as migrations completarem..."
+    sleep 90 # Tempo para as migrations rodarem
+
+    msg_header "REMOVENDO N8N EDITOR TEMPORÁRIO E IMPLANTANDO STACK COMPLETO DO N8N"
+    docker stack rm n8n-migrations >/dev/null 2>&1
+    sleep 10 # Aguarda a remoção do stack temporário
+
+    # Agora, e somente agora, subimos os stacks de aplicação completos
     deploy_stack_via_api "n8n" "$(generate_n8n_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
-    
     deploy_stack_via_api "typebot" "$(generate_typebot_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
     deploy_stack_via_api "evolution" "$(generate_evolution_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
 

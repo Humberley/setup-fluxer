@@ -5,7 +5,7 @@
 # Descrição: Implementa a lógica de instalação robusta do SetupOrion,
 #            incluindo preparação, deploy, verificação e configuração em etapas.
 # Autor: Humberley / [Seu Nome]
-# Versão: 10.6 (Corrige payload da criação de usuário do Portainer)
+# Versão: 11.0 (Instalação completa do ecossistema)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -85,6 +85,16 @@ validate_email() {
     fi
 }
 
+# Valida se a entrada não contém espaços ou caracteres especiais perigosos
+validate_simple_text() {
+    local text=$1
+    if [[ $text =~ [[:space:]] || ! $text =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        msg_warning "Entrada inválida. Não use espaços ou caracteres especiais (apenas letras, números, - e _)."
+        return 1
+    fi
+    return 0
+}
+
 # Verifica a propagação do DNS
 check_dns() {
     local domain_to_check=$1
@@ -121,7 +131,7 @@ check_dns() {
 # Função para aguardar um serviço estar com réplicas 1/1
 wait_stack() {
     local stack_name=$1
-    msg_header "Aguardando o serviço ${stack_name} ficar online"
+    echo -e "\n${NEGRITO}Aguardando o serviço ${stack_name} ficar online...${RESET}"
     while true; do
         if docker service ls --filter "name=${stack_name}" | grep -q "1/1"; then
             msg_success "Serviço ${stack_name} está online."
@@ -130,6 +140,57 @@ wait_stack() {
         printf "."
         sleep 10
     done
+}
+
+# Função para implantar um stack via API do Portainer
+deploy_stack_via_api() {
+    local stack_name=$1
+    local api_key=$2
+    local portainer_domain=$3
+    local endpoint_id=1
+    local stacks_dir="stacks"
+    local processed_dir="processed_stacks"
+
+    local template_file="${stacks_dir}/${stack_name}/${stack_name}.template.yml"
+    local processed_file="${processed_dir}/${stack_name}.yml"
+    
+    if [ ! -f "$template_file" ]; then
+        msg_warning "Ficheiro de template para '${stack_name}' não encontrado. A saltar."
+        return 1
+    fi
+
+    echo "-----------------------------------------------------"
+    echo "Processando e implantando o stack: ${NEGRITO}${stack_name}${RESET}..."
+    
+    envsubst < "$template_file" > "$processed_file"
+    local compose_content
+    compose_content=$(cat "$processed_file")
+
+    local json_payload
+    json_payload=$(jq -n \
+        --arg name "$stack_name" \
+        --arg content "$compose_content" \
+        '{Name: $name, StackFileContent: $content}')
+
+    local response
+    response=$(curl -s -k -w "%{http_code}" -X POST \
+        -H "X-API-Key: ${api_key}" \
+        -H "Content-Type: application/json" \
+        --data-binary @- \
+        "https://${portainer_domain}/api/stacks?type=1&method=string&endpointId=${endpoint_id}")
+    
+    local http_code=${response: -3}
+    local response_body=${response::-3}
+
+    if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
+        msg_success "Stack '${stack_name}' implantado com sucesso via API do Portainer!"
+        return 0
+    else
+        local error_message
+        error_message=$(echo "$response_body" | jq -r '.message, .details' | tr '\n' ' ')
+        msg_error "Falha ao implantar '${stack_name}' via API (Código: ${http_code}): ${error_message}"
+        return 1
+    fi
 }
 
 
@@ -152,11 +213,26 @@ main() {
     while true; do read -p "🌐 Qual é o seu domínio principal (ex: seudominio.com.br): " DOMINIO_RAIZ < /dev/tty; if validate_domain "$DOMINIO_RAIZ"; then break; fi; done
     while true; do read -p "📧 Email para o certificado SSL (Let's Encrypt): " LE_EMAIL < /dev/tty; if validate_email "$LE_EMAIL"; then break; fi; done
     while true; do echo -e "${AMARELO}--> A senha deve ter no mínimo 12 caracteres, com maiúsculas, minúsculas, números e especiais.${RESET}"; read -s -p "🔑 Digite uma senha para o Portainer: " PORTAINER_PASSWORD < /dev/tty; echo; if validate_password "$PORTAINER_PASSWORD"; then read -s -p "🔑 Confirme a senha do Portainer: " PORTAINER_PASSWORD_CONFIRM < /dev/tty; echo; if [[ "$PORTAINER_PASSWORD" == "$PORTAINER_PASSWORD_CONFIRM" ]]; then break; else msg_warning "As senhas não coincidem."; fi; fi; done
-    
+    while true; do read -p "👤 Utilizador root para o MinIO (sem espaços ou especiais): " MINIO_ROOT_USER < /dev/tty; if validate_simple_text "$MINIO_ROOT_USER"; then break; fi; done
+    while true; do echo -e "${AMARELO}--> A senha deve ter no mínimo 8 caracteres.${RESET}"; read -s -p "🔑 Digite uma senha para o MinIO: " MINIO_ROOT_PASSWORD < /dev/tty; echo; if [ ${#MINIO_ROOT_PASSWORD} -ge 8 ]; then read -s -p "🔑 Confirme a senha do MinIO: " MINIO_ROOT_PASSWORD_CONFIRM < /dev/tty; echo; if [[ "$MINIO_ROOT_PASSWORD" == "$MINIO_ROOT_PASSWORD_CONFIRM" ]]; then break; else msg_warning "As senhas não coincidem."; fi; else msg_warning "A senha do MinIO precisa ter no mínimo 8 caracteres."; fi; done
+
     # --- GERAÇÃO DE VARIÁVEIS E VERIFICAÇÃO DE DNS ---
     msg_header "GERANDO CONFIGURAÇÕES E VERIFICANDO DNS"
-    export DOMINIO_RAIZ LE_EMAIL PORTAINER_PASSWORD
+    export DOMINIO_RAIZ LE_EMAIL PORTAINER_PASSWORD MINIO_ROOT_USER MINIO_ROOT_PASSWORD
     export PORTAINER_DOMAIN="portainer.${DOMINIO_RAIZ}"
+    export N8N_EDITOR_DOMAIN="n8n.${DOMINIO_RAIZ}"
+    export N8N_WEBHOOK_DOMAIN="nwn.${DOMINIO_RAIZ}"
+    export TYPEBOT_EDITOR_DOMAIN="tpb.${DOMINIO_RAIZ}"
+    export TYPEBOT_VIEWER_DOMAIN="tpv.${DOMINIO_RAIZ}"
+    export MINIO_CONSOLE_DOMAIN="minio.${DOMINIO_RAIZ}"
+    export MINIO_S3_DOMAIN="s3.${DOMINIO_RAIZ}"
+    export EVOLUTION_DOMAIN="evo.${DOMINIO_RAIZ}"
+
+    export POSTGRES_PASSWORD=$(openssl rand -hex 16)
+    export N8N_ENCRYPTION_KEY=$(openssl rand -hex 16)
+    export TYPEBOT_ENCRYPTION_KEY=$(openssl rand -hex 16)
+    export EVOLUTION_API_KEY=$(openssl rand -hex 16)
+    
     export REDE_DOCKER="fluxerNet"
     msg_success "Variáveis geradas."
 
@@ -165,191 +241,106 @@ main() {
     # --- PREPARAÇÃO DO AMBIENTE SWARM ---
     msg_header "PREPARANDO O AMBIENTE SWARM"
     echo "Garantindo a existência da rede Docker overlay '${REDE_DOCKER}'..."; docker network rm "$REDE_DOCKER" >/dev/null 2>&1; docker network create --driver=overlay --attachable "$REDE_DOCKER" || msg_fatal "Falha ao criar a rede overlay '${REDE_DOCKER}'."; msg_success "Rede '${REDE_DOCKER}' pronta."
-    echo "Criando os volumes Docker..."; docker volume create "portainer_data" >/dev/null; docker volume create "volume_swarm_certificates" >/dev/null; docker volume create "volume_swarm_shared" >/dev/null; msg_success "Volumes prontos."
+    echo "Criando os volumes Docker..."; docker volume create "portainer_data" >/dev/null; docker volume create "volume_swarm_certificates" >/dev/null; docker volume create "volume_swarm_shared" >/dev/null; docker volume create "postgres_data" >/dev/null; docker volume create "redis_data" >/dev/null; docker volume create "minio_data" >/dev/null; docker volume create "evolution_instances" >/dev/null; msg_success "Volumes prontos."
 
     # --- ETAPA 1: INSTALAR TRAEFIK E PORTAINER ---
-    msg_header "[1/3] INSTALANDO TRAEFIK E PORTAINER"
-    
-    # --- Deploy Traefik ---
-    echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}..."
-    cat > /tmp/traefik.yml << EOL
+    msg_header "[1/4] INSTALANDO TRAEFIK E PORTAINER"
+    # ... (código para deploy do traefik e portainer) ...
+    echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}..."; cat > /tmp/traefik.yml << EOL
 version: "3.7"
 services:
   traefik:
     image: traefik:v3.0
     command:
-      - "--api.dashboard=true"
-      - "--providers.swarm=true"
-      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
-      - "--providers.docker.exposedbydefault=false"
-      - "--providers.docker.network=${REDE_DOCKER}"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
-      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
-      - "--certificatesresolvers.letsencryptresolver.acme.email=${LE_EMAIL}"
-      - "--certificatesresolvers.letsencryptresolver.acme.storage=/etc/traefik/letsencrypt/acme.json"
-      - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge=true"
-      - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge.entrypoint=web"
-      - "--log.level=DEBUG"
-      - "--log.filePath=/var/log/traefik/traefik.log"
-      - "--accesslog=true"
-      - "--accesslog.filepath=/var/log/traefik/access.log"
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - "volume_swarm_certificates:/etc/traefik/letsencrypt"
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
-      - "volume_swarm_shared:/var/log/traefik"
-    networks:
-      - ${REDE_DOCKER}
+      - "--api.dashboard=true"; - "--providers.swarm=true"; - "--providers.docker.endpoint=unix:///var/run/docker.sock"; - "--providers.docker.exposedbydefault=false"; - "--providers.docker.network=${REDE_DOCKER}"; - "--entrypoints.web.address=:80"; - "--entrypoints.websecure.address=:443"; - "--entrypoints.web.http.redirections.entrypoint.to=websecure"; - "--entrypoints.web.http.redirections.entrypoint.scheme=https"; - "--certificatesresolvers.letsencryptresolver.acme.email=${LE_EMAIL}"; - "--certificatesresolvers.letsencryptresolver.acme.storage=/etc/traefik/letsencrypt/acme.json"; - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge=true"; - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge.entrypoint=web"; - "--log.level=DEBUG"; - "--log.filePath=/var/log/traefik/traefik.log"; - "--accesslog=true"; - "--accesslog.filepath=/var/log/traefik/access.log"
+    ports: [ "80:80", "443:443" ]
+    volumes: [ "volume_swarm_certificates:/etc/traefik/letsencrypt", "/var/run/docker.sock:/var/run/docker.sock:ro", "volume_swarm_shared:/var/log/traefik" ]
+    networks: [ ${REDE_DOCKER} ]
     deploy:
       placement:
-        constraints:
-          - node.role == manager
-
+        constraints: [ "node.role == manager" ]
 networks:
   ${REDE_DOCKER}:
     external: true
     name: ${REDE_DOCKER}
-
 volumes:
-  volume_swarm_certificates:
-    external: true
-  volume_swarm_shared:
-    external: true
+  volume_swarm_certificates: { external: true }
+  volume_swarm_shared: { external: true }
 EOL
-    docker stack deploy --compose-file /tmp/traefik.yml traefik || msg_fatal "Falha ao implantar Traefik."
-    msg_success "Stack 'traefik' implantado."
-    rm /tmp/traefik.yml
-
-    # --- Deploy Portainer ---
-    echo "---"; echo "Implantando: ${NEGRITO}portainer${RESET}..."
-    cat > /tmp/portainer.yml << EOL
+    docker stack deploy --compose-file /tmp/traefik.yml traefik || msg_fatal "Falha ao implantar Traefik."; msg_success "Stack 'traefik' implantado."; rm /tmp/traefik.yml
+    echo "---"; echo "Implantando: ${NEGRITO}portainer${RESET}..."; cat > /tmp/portainer.yml << EOL
 version: "3.7"
 services:
   agent:
     image: portainer/agent:latest
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/docker/volumes:/var/lib/docker/volumes
-    networks:
-      - ${REDE_DOCKER}
+    volumes: [ "/var/run/docker.sock:/var/run/docker.sock", "/var/lib/docker/volumes:/var/lib/docker/volumes" ]
+    networks: [ ${REDE_DOCKER} ]
     deploy:
       mode: global
-      placement:
-        constraints: [node.platform.os == linux]
-
+      placement: { constraints: [node.platform.os == linux] }
   portainer:
     image: portainer/portainer-ce:latest
     command: -H tcp://tasks.agent:9001 --tlsskipverify
-    volumes:
-      - portainer_data:/data
-    networks:
-      - ${REDE_DOCKER}
+    volumes: [ "portainer_data:/data" ]
+    networks: [ ${REDE_DOCKER} ]
     deploy:
       mode: replicated
       replicas: 1
-      placement:
-        constraints: [node.role == manager]
-      labels:
-        - "traefik.enable=true"
-        - "traefik.http.routers.portainer.rule=Host(\`${PORTAINER_DOMAIN}\`)"
-        - "traefik.http.routers.portainer.entrypoints=websecure"
-        - "traefik.http.routers.portainer.tls.certresolver=letsencryptresolver"
-        - "traefik.http.services.portainer.loadbalancer.server.port=9000"
-        - "traefik.docker.network=${REDE_DOCKER}"
-
+      placement: { constraints: [node.role == manager] }
+      labels: [ "traefik.enable=true", "traefik.http.routers.portainer.rule=Host(\`${PORTAINER_DOMAIN}\`)", "traefik.http.routers.portainer.entrypoints=websecure", "traefik.http.routers.portainer.tls.certresolver=letsencryptresolver", "traefik.http.services.portainer.loadbalancer.server.port=9000", "traefik.docker.network=${REDE_DOCKER}" ]
 volumes:
-  portainer_data:
-    external: true
-    name: portainer_data
-
+  portainer_data: { external: true, name: portainer_data }
 networks:
-  ${REDE_DOCKER}:
-    external: true
-    name: ${REDE_DOCKER}
+  ${REDE_DOCKER}: { external: true, name: ${REDE_DOCKER} }
 EOL
-    docker stack deploy --compose-file /tmp/portainer.yml portainer || msg_fatal "Falha ao implantar Portainer."
-    msg_success "Stack 'portainer' implantado."
-    rm /tmp/portainer.yml
+    docker stack deploy --compose-file /tmp/portainer.yml portainer || msg_fatal "Falha ao implantar Portainer."; msg_success "Stack 'portainer' implantado."; rm /tmp/portainer.yml
 
     # --- ETAPA 2: VERIFICAR SERVIÇOS E CONFIGURAR PORTAINER ---
-    msg_header "[2/3] VERIFICANDO SERVIÇOS E CONFIGURANDO PORTAINER"
+    msg_header "[2/4] VERIFICANDO SERVIÇOS E CONFIGURANDO PORTAINER"
     wait_stack "traefik_traefik"
     wait_stack "portainer_portainer"
     
-    echo "Aguardando 30 segundos para estabilização dos serviços antes de criar a conta..."
-    sleep 30
+    echo "Aguardando 30 segundos para estabilização dos serviços..."; sleep 30
 
-    echo "Tentando criar conta de administrador no Portainer..."
-    local max_retries=10
-    local account_created=false
+    echo "Tentando criar conta de administrador no Portainer..."; local max_retries=10; local account_created=false
     for i in $(seq 1 $max_retries); do
-        local init_response
-        init_response=$(curl -s -k -w "\n%{http_code}" -X POST "https://${PORTAINER_DOMAIN}/api/users/admin/init" \
-            -H "Content-Type: application/json" \
-            --data "{\"Username\": \"admin\", \"Password\": \"${PORTAINER_PASSWORD}\"}")
-        
-        local http_code
-        http_code=$(tail -n1 <<< "$init_response")
-        local response_body
-        response_body=$(sed '$ d' <<< "$init_response")
-        
-        if [[ "$http_code" == "200" ]]; then
-            msg_success "Utilizador 'admin' do Portainer criado com sucesso!"
-            account_created=true
-            break
-        else
-            msg_warning "Tentativa ${i}/${max_retries} falhou."
-            echo "Código HTTP retornado: ${http_code}"
-            echo "Resposta da API: ${response_body}"
-            echo -e "${AMARELO}--- Logs do Traefik (últimos 30s) ---${RESET}"
-            docker service logs --tail 20 --since 30s traefik_traefik
-            echo -e "${AMARELO}-------------------------------------${RESET}"
-            echo "A aguardar 15 segundos antes de tentar novamente..."
-            sleep 15
-        fi
+        local init_response; init_response=$(curl -s -k -w "\n%{http_code}" -X POST "https://${PORTAINER_DOMAIN}/api/users/admin/init" -H "Content-Type: application/json" --data "{\"Username\": \"admin\", \"Password\": \"${PORTAINER_PASSWORD}\"}"); local http_code=$(tail -n1 <<< "$init_response"); local response_body=$(sed '$ d' <<< "$init_response")
+        if [[ "$http_code" == "200" ]]; then msg_success "Utilizador 'admin' do Portainer criado!"; account_created=true; break; else msg_warning "Tentativa ${i}/${max_retries} falhou."; echo "Código HTTP: ${http_code}"; echo "Resposta: ${response_body}"; echo "Aguardando 15s..."; sleep 15; fi
     done
+    if [ "$account_created" = false ]; then msg_fatal "Não foi possível criar a conta de administrador no Portainer."; fi
 
-    if [ "$account_created" = false ]; then
-        msg_fatal "Não foi possível criar a conta de administrador no Portainer. Verifique os logs do Traefik e Portainer e as configurações de firewall."
+    # --- ETAPA 3: OBTER CHAVE DE API ---
+    msg_header "[3/4] OBTENDO CHAVE DE API DO PORTAINER"
+    echo "A autenticar para obter token JWT..."; local jwt_response; jwt_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/auth" -H "Content-Type: application/json" --data "{\"username\": \"admin\", \"password\": \"${PORTAINER_PASSWORD}\"}"); local PORTAINER_JWT=$(echo "$jwt_response" | jq -r .jwt); if [[ -z "$PORTAINER_JWT" || "$PORTAINER_JWT" == "null" ]]; then msg_fatal "Falha ao obter o token JWT."; fi; msg_success "Token JWT obtido."
+    echo "A gerar chave de API..."; local apikey_response; apikey_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/users/admin/tokens" -H "Authorization: Bearer ${PORTAINER_JWT}" -H "Content-Type: application/json" --data '{"description": "fluxer_installer_key"}'); local PORTAINER_API_KEY=$(echo "$apikey_response" | jq -r .raw); if [[ -z "$PORTAINER_API_KEY" || "$PORTAINER_API_KEY" == "null" ]]; then msg_fatal "Falha ao gerar a chave de API."; fi; msg_success "Chave de API gerada!"
+
+    # --- ETAPA 4: IMPLANTAR STACKS DE APLICAÇÃO VIA API ---
+    msg_header "[4/4] IMPLANTANDO STACKS DE APLICAÇÃO"
+    local PROCESSED_DIR="processed_stacks"; mkdir -p "$PROCESSED_DIR"
+    local DEPLOY_ORDER_API=("redis" "postgres" "minio" "n8n" "typebot" "evolution")
+    for stack_name in "${DEPLOY_ORDER_API[@]}"; do
+        deploy_stack_via_api "$stack_name" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN"
+    done
+    rm -rf "$PROCESSED_DIR"
+
+    # --- RESUMO FINAL ---
+    msg_header "🎉 INSTALAÇÃO CONCLUÍDA 🎉"
+    echo "Aguarde alguns minutos para que todos os serviços sejam iniciados."; echo "Pode verificar o estado no seu painel Portainer ou com o comando: ${NEGRITO}docker service ls${RESET}"; echo; echo "Abaixo estão os seus links de acesso:"; echo
+    echo -e "${NEGRITO}Painel Portainer:   https://${PORTAINER_DOMAIN}${RESET}"
+    echo -e "${NEGRITO}Painel n8n (editor):  https://${N8N_EDITOR_DOMAIN}${RESET}"
+    echo -e "${NEGRITO}Builder Typebot:      https://${TYPEBOT_EDITOR_DOMAIN}${RESET}"
+    echo -e "${NEGRITO}MinIO Painel:         https://${MINIO_CONSOLE_DOMAIN}${RESET}"
+    echo -e "${NEGRITO}Evolution API:        https://${EVOLUTION_DOMAIN}${RESET}"
+    echo
+    read -p "Deseja exibir as senhas e chaves geradas? (s/N): " SHOW_CREDS < /dev/tty
+    if [[ "$SHOW_CREDS" =~ ^[Ss]$ ]]; then
+        echo; msg_header "CREDENCIAS GERADAS (guarde em local seguro)"
+        echo -e "${NEGRITO}Senha do Portainer:      ${PORTAINER_PASSWORD}${RESET}"
+        echo -e "${NEGRITO}Utilizador root do MinIO:   ${MINIO_ROOT_USER}${RESET}"
+        echo -e "${NEGRITO}Senha root do MinIO:     ${MINIO_ROOT_PASSWORD}${RESET}"
+        echo -e "${NEGRITO}Chave da Evolution API:  ${EVOLUTION_API_KEY}${RESET}"
     fi
-
-    # --- ETAPA 3: ARMAZENAR CREDENCIAIS E FINALIZAR ---
-    msg_header "[3/3] GERANDO TOKEN E ARMAZENANDO CREDENCIAIS"
-    
-    echo "A autenticar para obter token JWT..."
-    local jwt_response
-    jwt_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/auth" \
-        -H "Content-Type: application/json" \
-        --data "{\"username\": \"admin\", \"password\": \"${PORTAINER_PASSWORD}\"}")
-    local PORTAINER_JWT=$(echo "$jwt_response" | jq -r .jwt)
-    if [[ -z "$PORTAINER_JWT" || "$PORTAINER_JWT" == "null" ]]; then msg_fatal "Falha ao obter o token JWT."; fi
-    msg_success "Token JWT obtido."
-
-    local DADOS_DIR="/root/dados_vps"
-    mkdir -p "$DADOS_DIR"
-    local DADOS_FILE="${DADOS_DIR}/dados_portainer"
-    echo "Salvando credenciais do Portainer em ${DADOS_FILE}..."
-    {
-        echo "[ PORTAINER ]"
-        echo "Dominio do portainer: https://${PORTAINER_DOMAIN}"
-        echo "Usuario: admin"
-        echo "Senha: ${PORTAINER_PASSWORD}"
-        echo "Token: ${PORTAINER_JWT}"
-    } > "$DADOS_FILE"
-    chmod 600 "$DADOS_FILE"
-    msg_success "Credenciais salvas com sucesso."
-
-    msg_header "🎉 INSTALAÇÃO DA BASE CONCLUÍDA 🎉"
-    echo "O ambiente base com Traefik e Portainer está pronto."
-    echo "Agora você pode executar outros scripts para instalar aplicações adicionais."
-    echo
-    echo -e "${NEGRITO}Acesse o seu Portainer em: https://${PORTAINER_DOMAIN}${RESET}"
-    echo -e "Use o utilizador 'admin' e a senha que você definiu."
-    echo
+    echo; msg_success "Tudo pronto! Aproveite o seu novo ambiente de automação."
 }
 
 # --- PONTO DE ENTRADA DO SCRIPT ---

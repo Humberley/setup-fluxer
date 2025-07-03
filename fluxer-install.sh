@@ -5,7 +5,7 @@
 # Descrição: Implementa a lógica de instalação robusta do SetupOrion,
 #            incluindo preparação, deploy, verificação e configuração em etapas.
 # Autor: Humberley / [Seu Nome]
-# Versão: 11.1 (Corrige sintaxe YAML do Traefik)
+# Versão: 11.2 (Corrige endpoint de criação da chave de API)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -245,10 +245,8 @@ main() {
 
     # --- ETAPA 1: INSTALAR TRAEFIK E PORTAINER ---
     msg_header "[1/4] INSTALANDO TRAEFIK E PORTAINER"
-    
-    # --- Deploy Traefik ---
-    echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}..."
-    cat > /tmp/traefik.yml << EOL
+    # ... (código para deploy do traefik e portainer) ...
+    echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}..."; cat > /tmp/traefik.yml << EOL
 version: "3.7"
 services:
   traefik:
@@ -271,19 +269,12 @@ services:
       - "--log.filePath=/var/log/traefik/traefik.log"
       - "--accesslog=true"
       - "--accesslog.filepath=/var/log/traefik/access.log"
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - "volume_swarm_certificates:/etc/traefik/letsencrypt"
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
-      - "volume_swarm_shared:/var/log/traefik"
-    networks:
-      - ${REDE_DOCKER}
+    ports: [ "80:80", "443:443" ]
+    volumes: [ "volume_swarm_certificates:/etc/traefik/letsencrypt", "/var/run/docker.sock:/var/run/docker.sock:ro", "volume_swarm_shared:/var/log/traefik" ]
+    networks: [ ${REDE_DOCKER} ]
     deploy:
       placement:
-        constraints:
-          - node.role == manager
+        constraints: [ "node.role == manager" ]
 networks:
   ${REDE_DOCKER}:
     external: true
@@ -293,44 +284,27 @@ volumes:
   volume_swarm_shared:
     external: true
 EOL
-    docker stack deploy --compose-file /tmp/traefik.yml traefik || msg_fatal "Falha ao implantar Traefik."
-    msg_success "Stack 'traefik' implantado."
-    rm /tmp/traefik.yml
-
-    # --- Deploy Portainer ---
+    docker stack deploy --compose-file /tmp/traefik.yml traefik || msg_fatal "Falha ao implantar Traefik."; msg_success "Stack 'traefik' implantado."; rm /tmp/traefik.yml
     echo "---"; echo "Implantando: ${NEGRITO}portainer${RESET}..."; cat > /tmp/portainer.yml << EOL
 version: "3.7"
 services:
   agent:
     image: portainer/agent:latest
-    volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock"
-      - "/var/lib/docker/volumes:/var/lib/docker/volumes"
-    networks:
-      - ${REDE_DOCKER}
+    volumes: [ "/var/run/docker.sock:/var/run/docker.sock", "/var/lib/docker/volumes:/var/lib/docker/volumes" ]
+    networks: [ ${REDE_DOCKER} ]
     deploy:
       mode: global
-      placement:
-        constraints: [node.platform.os == linux]
+      placement: { constraints: [node.platform.os == linux] }
   portainer:
     image: portainer/portainer-ce:latest
     command: -H tcp://tasks.agent:9001 --tlsskipverify
-    volumes:
-      - "portainer_data:/data"
-    networks:
-      - ${REDE_DOCKER}
+    volumes: [ "portainer_data:/data" ]
+    networks: [ ${REDE_DOCKER} ]
     deploy:
       mode: replicated
       replicas: 1
-      placement:
-        constraints: [node.role == manager]
-      labels:
-        - "traefik.enable=true"
-        - "traefik.http.routers.portainer.rule=Host(\`${PORTAINER_DOMAIN}\`)"
-        - "traefik.http.routers.portainer.entrypoints=websecure"
-        - "traefik.http.routers.portainer.tls.certresolver=letsencryptresolver"
-        - "traefik.http.services.portainer.loadbalancer.server.port=9000"
-        - "traefik.docker.network=${REDE_DOCKER}"
+      placement: { constraints: [node.role == manager] }
+      labels: [ "traefik.enable=true", "traefik.http.routers.portainer.rule=Host(\`${PORTAINER_DOMAIN}\`)", "traefik.http.routers.portainer.entrypoints=websecure", "traefik.http.routers.portainer.tls.certresolver=letsencryptresolver", "traefik.http.services.portainer.loadbalancer.server.port=9000", "traefik.docker.network=${REDE_DOCKER}" ]
 volumes:
   portainer_data:
     external: true
@@ -357,7 +331,10 @@ EOL
     # --- ETAPA 3: OBTER CHAVE DE API ---
     msg_header "[3/4] OBTENDO CHAVE DE API DO PORTAINER"
     echo "A autenticar para obter token JWT..."; local jwt_response; jwt_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/auth" -H "Content-Type: application/json" --data "{\"username\": \"admin\", \"password\": \"${PORTAINER_PASSWORD}\"}"); local PORTAINER_JWT=$(echo "$jwt_response" | jq -r .jwt); if [[ -z "$PORTAINER_JWT" || "$PORTAINER_JWT" == "null" ]]; then msg_fatal "Falha ao obter o token JWT."; fi; msg_success "Token JWT obtido."
-    echo "A gerar chave de API..."; local apikey_response; apikey_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/users/admin/tokens" -H "Authorization: Bearer ${PORTAINER_JWT}" -H "Content-Type: application/json" --data '{"description": "fluxer_installer_key"}'); local PORTAINER_API_KEY=$(echo "$apikey_response" | jq -r .raw); if [[ -z "$PORTAINER_API_KEY" || "$PORTAINER_API_KEY" == "null" ]]; then msg_fatal "Falha ao gerar a chave de API."; fi; msg_success "Chave de API gerada!"
+    
+    echo "Decodificando token para obter o ID do utilizador..."; local USER_ID; USER_ID=$(echo "$PORTAINER_JWT" | cut -d. -f2 | base64 --decode 2>/dev/null | jq -r .id); if [[ -z "$USER_ID" || "$USER_ID" == "null" ]]; then msg_fatal "Falha ao extrair o ID do utilizador do token JWT."; fi; msg_success "ID do utilizador 'admin' é: ${USER_ID}"
+
+    echo "A gerar chave de API..."; local apikey_response; apikey_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/users/${USER_ID}/tokens" -H "Authorization: Bearer ${PORTAINER_JWT}" -H "Content-Type: application/json" --data '{"description": "fluxer_installer_key"}'); local PORTAINER_API_KEY=$(echo "$apikey_response" | jq -r .raw); if [[ -z "$PORTAINER_API_KEY" || "$PORTAINER_API_KEY" == "null" ]]; then msg_error "A resposta da API para criação da chave foi: $apikey_response"; msg_fatal "Falha ao gerar a chave de API."; fi; msg_success "Chave de API gerada!"
 
     # --- ETAPA 4: IMPLANTAR STACKS DE APLICAÇÃO VIA API ---
     msg_header "[4/4] IMPLANTANDO STACKS DE APLICAÇÃO"
@@ -389,4 +366,4 @@ EOL
 }
 
 # --- PONTO DE ENTRADA DO SCRIPT ---
-main
+mai

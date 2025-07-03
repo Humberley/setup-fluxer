@@ -5,7 +5,7 @@
 # Descrição: Coleta as informações do usuário, prepara o ambiente Docker Swarm
 #            e inicia os serviços através da API do Portainer para gestão centralizada.
 # Autor: Humberley / [Seu Nome]
-# Versão: 4.4 (Corrige controlo de Stacks no Portainer)
+# Versão: 4.5 (Solução Definitiva com Rede Robusta)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -144,7 +144,9 @@ main() {
     msg_header "PREPARANDO O AMBIENTE SWARM"
     
     echo "Garantindo a existência da rede Docker overlay '${REDE_DOCKER}'..."
+    # Remove a rede se ela existir, para garantir que podemos criá-la com o tipo correto.
     docker network rm "$REDE_DOCKER" >/dev/null 2>&1
+    # Cria a rede com o driver overlay, essencial para o Swarm.
     if ! docker network create --driver=overlay --attachable "$REDE_DOCKER"; then
         msg_error "Falha ao criar a rede overlay '${REDE_DOCKER}'."
     fi

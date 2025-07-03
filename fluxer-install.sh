@@ -1,12 +1,12 @@
 #!/bin/bash
 
 #-------------------------------------------------------------------------------
-# Script: Instalador de Ambiente Fluxer (Atualizado)
+# Script: Instalador de Ambiente Fluxer (Corrigido)
 # Descrição: Implementa a lógica de instalação do SetupOrion,
 #            utilizando as configurações YAML completas fornecidas nos
 #            arquivos .template.yml para máxima robustez e funcionalidades.
 # Autor: Humberley / Gemini
-# Versão: 13.0 (Final - YAMLs Completos Embutidos)
+# Versão: 13.1 (Final - YAMLs Corrigidos)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -274,14 +274,11 @@ services:
       ]
 
     volumes:
-      - \${REDIS_VOLUME}:/data
+      - ${REDIS_VOLUME}:/data
 
     networks:
-      - \${REDE_DOCKER}
+      - ${REDE_DOCKER}
       
-    #ports:
-    #  - 6379:6379
-
     deploy:
       placement:
         constraints:
@@ -292,14 +289,14 @@ services:
           memory: 2048M
 
 volumes:
-  \${REDIS_VOLUME}:
+  ${REDIS_VOLUME}:
     external: true
-    name: \${REDIS_VOLUME}
+    name: ${REDIS_VOLUME}
 
 networks:
-  \${REDE_DOCKER}:
+  ${REDE_DOCKER}:
     external: true
-    name: \${REDE_DOCKER}
+    name: ${REDE_DOCKER}
 EOL
 }
 
@@ -311,13 +308,13 @@ services:
     image: postgres:14
 
     volumes:
-      - \${POSTGRES_VOLUME}:/var/lib/postgresql/data
+      - ${POSTGRES_VOLUME}:/var/lib/postgresql/data
 
     networks:
-      - \${REDE_DOCKER}
+      - ${REDE_DOCKER}
 
     environment:
-      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - PG_MAX_CONNECTIONS=500
 
     deploy:
@@ -332,14 +329,14 @@ services:
           memory: 1024M
 
 volumes:
-  \${POSTGRES_VOLUME}:
+  ${POSTGRES_VOLUME}:
     external: true
-    name: \${POSTGRES_VOLUME}
+    name: ${POSTGRES_VOLUME}
 
 networks:
-  \${REDE_DOCKER}:
+  ${REDE_DOCKER}:
     external: true
-    name: \${REDE_DOCKER}
+    name: ${REDE_DOCKER}
 EOL
 }
 
@@ -353,16 +350,16 @@ services:
     command: server /data --console-address ":9001"
 
     volumes:
-      - \${MINIO_VOLUME}:/data
+      - ${MINIO_VOLUME}:/data
 
     networks:
-      - \${REDE_DOCKER}
+      - ${REDE_DOCKER}
 
     environment:
-      - MINIO_ROOT_USER=\${MINIO_ROOT_USER}
-      - MINIO_ROOT_PASSWORD=\${MINIO_ROOT_PASSWORD}
-      - MINIO_BROWSER_REDIRECT_URL=https://\${MINIO_CONSOLE_DOMAIN}
-      - MINIO_SERVER_URL=https://\${MINIO_S3_DOMAIN}
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_BROWSER_REDIRECT_URL=https://${MINIO_CONSOLE_DOMAIN}
+      - MINIO_SERVER_URL=https://${MINIO_S3_DOMAIN}
 
     deploy:
       mode: replicated
@@ -374,7 +371,7 @@ services:
         - "traefik.enable=true"
 
         # S3 público
-        - "traefik.http.routers.minio_public.rule=Host(\`\${MINIO_S3_DOMAIN}\`)"
+        - "traefik.http.routers.minio_public.rule=Host(\`${MINIO_S3_DOMAIN}\`)"
         - "traefik.http.routers.minio_public.entrypoints=websecure"
         - "traefik.http.routers.minio_public.tls.certresolver=letsencryptresolver"
         - "traefik.http.services.minio_public.loadbalancer.server.port=9000"
@@ -382,7 +379,7 @@ services:
         - "traefik.http.routers.minio_public.service=minio_public"
 
         # Console
-        - "traefik.http.routers.minio_console.rule=Host(\`\${MINIO_CONSOLE_DOMAIN}\`)"
+        - "traefik.http.routers.minio_console.rule=Host(\`${MINIO_CONSOLE_DOMAIN}\`)"
         - "traefik.http.routers.minio_console.entrypoints=websecure"
         - "traefik.http.routers.minio_console.tls.certresolver=letsencryptresolver"
         - "traefik.http.services.minio_console.loadbalancer.server.port=9001"
@@ -390,14 +387,14 @@ services:
         - "traefik.http.routers.minio_console.service=minio_console"
 
 volumes:
-  \${MINIO_VOLUME}:
+  ${MINIO_VOLUME}:
     external: true
-    name: \${MINIO_VOLUME}
+    name: ${MINIO_VOLUME}
 
 networks:
-  \${REDE_DOCKER}:
+  ${REDE_DOCKER}:
     external: true
-    name: \${REDE_DOCKER}
+    name: ${REDE_DOCKER}
 EOL
 }
 
@@ -410,19 +407,19 @@ services:
     image: n8nio/n8n:latest
     command: start
     networks:
-      - \${REDE_DOCKER}
+      - ${REDE_DOCKER}
     environment:
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_DATABASE=n8n_queue
       - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_USER=postgres
-      - DB_POSTGRESDB_PASSWORD=\${POSTGRES_PASSWORD}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
 
-      - N8N_ENCRYPTION_KEY=\${N8N_ENCRYPTION_KEY}
-      - N8N_HOST=\${N8N_EDITOR_DOMAIN}
-      - N8N_EDITOR_BASE_URL=https://\${N8N_EDITOR_DOMAIN}/
-      - WEBHOOK_URL=https://\${N8N_WEBHOOK_DOMAIN}/
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_HOST=${N8N_EDITOR_DOMAIN}
+      - N8N_EDITOR_BASE_URL=https://${N8N_EDITOR_DOMAIN}/
+      - WEBHOOK_URL=https://${N8N_WEBHOOK_DOMAIN}/
       - N8N_PROTOCOL=https
       - NODE_ENV=production
       - EXECUTIONS_MODE=queue
@@ -430,12 +427,12 @@ services:
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
       - N8N_NODE_PATH=/home/node/.n8n/nodes
 
-      - N8N_SMTP_SENDER=\${SMTP_USER}
-      - N8N_SMTP_USER=\${SMTP_USER}
-      - N8N_SMTP_PASS=\${SMTP_PASS}
-      - N8N_SMTP_HOST=\${SMTP_HOST}
-      - N8N_SMTP_PORT=\${SMTP_PORT}
-      - N8N_SMTP_SSL=\${SMTP_SSL}
+      - N8N_SMTP_SENDER=${SMTP_USER}
+      - N8N_SMTP_USER=${SMTP_USER}
+      - N8N_SMTP_PASS=${SMTP_PASS}
+      - N8N_SMTP_HOST=${SMTP_HOST}
+      - N8N_SMTP_PORT=${SMTP_PORT}
+      - N8N_SMTP_SSL=${SMTP_SSL}
 
       - QUEUE_BULL_REDIS_HOST=redis
       - QUEUE_BULL_REDIS_PORT=6379
@@ -458,7 +455,7 @@ services:
           memory: 1024M
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.n8n_editor.rule=Host(\`\${N8N_EDITOR_DOMAIN}\`)"
+        - "traefik.http.routers.n8n_editor.rule=Host(\`${N8N_EDITOR_DOMAIN}\`)"
         - "traefik.http.routers.n8n_editor.entrypoints=websecure"
         - "traefik.http.routers.n8n_editor.priority=1"
         - "traefik.http.routers.n8n_editor.tls.certresolver=letsencryptresolver"
@@ -470,19 +467,19 @@ services:
     image: n8nio/n8n:latest
     command: webhook
     networks:
-      - \${REDE_DOCKER}
+      - ${REDE_DOCKER}
     environment:
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_DATABASE=n8n_queue
       - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_USER=postgres
-      - DB_POSTGRESDB_PASSWORD=\${POSTGRES_PASSWORD}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
 
-      - N8N_ENCRYPTION_KEY=\${N8N_ENCRYPTION_KEY}
-      - N8N_HOST=\${N8N_EDITOR_DOMAIN}
-      - N8N_EDITOR_BASE_URL=https://\${N8N_EDITOR_DOMAIN}/
-      - WEBHOOK_URL=https://\${N8N_WEBHOOK_DOMAIN}/
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_HOST=${N8N_EDITOR_DOMAIN}
+      - N8N_EDITOR_BASE_URL=https://${N8N_EDITOR_DOMAIN}/
+      - WEBHOOK_URL=https://${N8N_WEBHOOK_DOMAIN}/
       - N8N_PROTOCOL=https
       - NODE_ENV=production
       - EXECUTIONS_MODE=queue
@@ -490,12 +487,12 @@ services:
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
       - N8N_NODE_PATH=/home/node/.n8n/nodes
 
-      - N8N_SMTP_SENDER=\${SMTP_USER}
-      - N8N_SMTP_USER=\${SMTP_USER}
-      - N8N_SMTP_PASS=\${SMTP_PASS}
-      - N8N_SMTP_HOST=\${SMTP_HOST}
-      - N8N_SMTP_PORT=\${SMTP_PORT}
-      - N8N_SMTP_SSL=\${SMTP_SSL}
+      - N8N_SMTP_SENDER=${SMTP_USER}
+      - N8N_SMTP_USER=${SMTP_USER}
+      - N8N_SMTP_PASS=${SMTP_PASS}
+      - N8N_SMTP_HOST=${SMTP_HOST}
+      - N8N_SMTP_PORT=${SMTP_PORT}
+      - N8N_SMTP_SSL=${SMTP_SSL}
 
       - QUEUE_BULL_REDIS_HOST=redis
       - QUEUE_BULL_REDIS_PORT=6379
@@ -518,7 +515,7 @@ services:
           memory: 1024M
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.n8n_webhook.rule=Host(\`\${N8N_WEBHOOK_DOMAIN}\`)"
+        - "traefik.http.routers.n8n_webhook.rule=Host(\`${N8N_WEBHOOK_DOMAIN}\`)"
         - "traefik.http.routers.n8n_webhook.entrypoints=websecure"
         - "traefik.http.routers.n8n_webhook.priority=1"
         - "traefik.http.routers.n8n_webhook.tls.certresolver=letsencryptresolver"
@@ -530,19 +527,19 @@ services:
     image: n8nio/n8n:latest
     command: worker --concurrency=10
     networks:
-      - \${REDE_DOCKER}
+      - ${REDE_DOCKER}
     environment:
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_DATABASE=n8n_queue
       - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_USER=postgres
-      - DB_POSTGRESDB_PASSWORD=\${POSTGRES_PASSWORD}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
 
-      - N8N_ENCRYPTION_KEY=\${N8N_ENCRYPTION_KEY}
-      - N8N_HOST=\${N8N_EDITOR_DOMAIN}
-      - N8N_EDITOR_BASE_URL=https://\${N8N_EDITOR_DOMAIN}/
-      - WEBHOOK_URL=https://\${N8N_WEBHOOK_DOMAIN}/
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_HOST=${N8N_EDITOR_DOMAIN}
+      - N8N_EDITOR_BASE_URL=https://${N8N_EDITOR_DOMAIN}/
+      - WEBHOOK_URL=https://${N8N_WEBHOOK_DOMAIN}/
       - N8N_PROTOCOL=https
       - NODE_ENV=production
       - EXECUTIONS_MODE=queue
@@ -550,12 +547,12 @@ services:
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
       - N8N_NODE_PATH=/home/node/.n8n/nodes
 
-      - N8N_SMTP_SENDER=\${SMTP_USER}
-      - N8N_SMTP_USER=\${SMTP_USER}
-      - N8N_SMTP_PASS=\${SMTP_PASS}
-      - N8N_SMTP_HOST=\${SMTP_HOST}
-      - N8N_SMTP_PORT=\${SMTP_PORT}
-      - N8N_SMTP_SSL=\${SMTP_SSL}
+      - N8N_SMTP_SENDER=${SMTP_USER}
+      - N8N_SMTP_USER=${SMTP_USER}
+      - N8N_SMTP_PASS=${SMTP_PASS}
+      - N8N_SMTP_HOST=${SMTP_HOST}
+      - N8N_SMTP_PORT=${SMTP_PORT}
+      - N8N_SMTP_SSL=${SMTP_SSL}
 
       - QUEUE_BULL_REDIS_HOST=redis
       - QUEUE_BULL_REDIS_PORT=6379
@@ -578,9 +575,9 @@ services:
           memory: 1024M
 
 networks:
-  \${REDE_DOCKER}:
+  ${REDE_DOCKER}:
     external: true
-    name: \${REDE_DOCKER}
+    name: ${REDE_DOCKER}
 EOL
 }
 
@@ -592,31 +589,31 @@ services:
   typebot_builder:
     image: baptistearno/typebot-builder:latest
     networks:
-      - \${REDE_DOCKER}
+      - ${REDE_DOCKER}
     environment:
-      - DATABASE_URL=postgresql://postgres:\${POSTGRES_PASSWORD}@postgres:5432/typebot
-      - ENCRYPTION_SECRET=\${TYPEBOT_ENCRYPTION_KEY}
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/typebot
+      - ENCRYPTION_SECRET=${TYPEBOT_ENCRYPTION_KEY}
       - DEFAULT_WORKSPACE_PLAN=UNLIMITED
 
-      - NEXTAUTH_URL=https://\${TYPEBOT_EDITOR_DOMAIN}
-      - NEXT_PUBLIC_VIEWER_URL=https://\${TYPEBOT_VIEWER_DOMAIN}
+      - NEXTAUTH_URL=https://${TYPEBOT_EDITOR_DOMAIN}
+      - NEXT_PUBLIC_VIEWER_URL=https://${TYPEBOT_VIEWER_DOMAIN}
       - NEXTAUTH_URL_INTERNAL=http://localhost:3000
 
       - DISABLE_SIGNUP=false
 
-      - ADMIN_EMAIL=\${SMTP_USER}
-      - NEXT_PUBLIC_SMTP_FROM='Suporte <\${SMTP_USER}>'
+      - ADMIN_EMAIL=${SMTP_USER}
+      - NEXT_PUBLIC_SMTP_FROM='Suporte <${SMTP_USER}>'
       - SMTP_AUTH_DISABLED=false
-      - SMTP_USERNAME=\${SMTP_USER}
-      - SMTP_PASSWORD=\${SMTP_PASS}
-      - SMTP_HOST=\${SMTP_HOST}
-      - SMTP_PORT=\${SMTP_PORT}
-      - SMTP_SECURE=\${SMTP_SSL}
+      - SMTP_USERNAME=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASS}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_SECURE=${SMTP_SSL}
 
-      - S3_ACCESS_KEY=\${MINIO_ROOT_USER}
-      - S3_SECRET_KEY=\${MINIO_ROOT_PASSWORD}
+      - S3_ACCESS_KEY=${MINIO_ROOT_USER}
+      - S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
       - S3_BUCKET=typebot
-      - S3_ENDPOINT=\${MINIO_S3_DOMAIN}
+      - S3_ENDPOINT=${MINIO_S3_DOMAIN}
 
     deploy:
       mode: replicated
@@ -631,7 +628,7 @@ services:
       labels:
         - "io.portainer.accesscontrol.users=admin"
         - "traefik.enable=true"
-        - "traefik.http.routers.typebot_builder.rule=Host(\`\${TYPEBOT_EDITOR_DOMAIN}\`)"
+        - "traefik.http.routers.typebot_builder.rule=Host(\`${TYPEBOT_EDITOR_DOMAIN}\`)"
         - "traefik.http.routers.typebot_builder.entrypoints=websecure"
         - "traefik.http.routers.typebot_builder.tls.certresolver=letsencryptresolver"
         - "traefik.http.services.typebot_builder.loadbalancer.server.port=3000"
@@ -641,31 +638,31 @@ services:
   typebot_viewer:
     image: baptistearno/typebot-viewer:latest
     networks:
-      - \${REDE_DOCKER}
+      - ${REDE_DOCKER}
     environment:
-      - DATABASE_URL=postgresql://postgres:\${POSTGRES_PASSWORD}@postgres:5432/typebot
-      - ENCRYPTION_SECRET=\${TYPEBOT_ENCRYPTION_KEY}
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/typebot
+      - ENCRYPTION_SECRET=${TYPEBOT_ENCRYPTION_KEY}
       - DEFAULT_WORKSPACE_PLAN=UNLIMITED
 
-      - NEXTAUTH_URL=https://\${TYPEBOT_EDITOR_DOMAIN}
-      - NEXT_PUBLIC_VIEWER_URL=https://\${TYPEBOT_VIEWER_DOMAIN}
+      - NEXTAUTH_URL=https://${TYPEBOT_EDITOR_DOMAIN}
+      - NEXT_PUBLIC_VIEWER_URL=https://${TYPEBOT_VIEWER_DOMAIN}
       - NEXTAUTH_URL_INTERNAL=http://localhost:3000
 
       - DISABLE_SIGNUP=false
 
-      - ADMIN_EMAIL=\${SMTP_USER}
-      - NEXT_PUBLIC_SMTP_FROM='Suporte <\${SMTP_USER}>'
+      - ADMIN_EMAIL=${SMTP_USER}
+      - NEXT_PUBLIC_SMTP_FROM='Suporte <${SMTP_USER}>'
       - SMTP_AUTH_DISABLED=false
-      - SMTP_USERNAME=\${SMTP_USER}
-      - SMTP_PASSWORD=\${SMTP_PASS}
-      - SMTP_HOST=\${SMTP_HOST}
-      - SMTP_PORT=\${SMTP_PORT}
-      - SMTP_SECURE=\${SMTP_SSL}
+      - SMTP_USERNAME=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASS}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_SECURE=${SMTP_SSL}
 
-      - S3_ACCESS_KEY=\${MINIO_ROOT_USER}
-      - S3_SECRET_KEY=\${MINIO_ROOT_PASSWORD}
+      - S3_ACCESS_KEY=${MINIO_ROOT_USER}
+      - S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
       - S3_BUCKET=typebot
-      - S3_ENDPOINT=\${MINIO_S3_DOMAIN}
+      - S3_ENDPOINT=${MINIO_S3_DOMAIN}
 
     deploy:
       mode: replicated
@@ -680,7 +677,7 @@ services:
       labels:
         - "io.portainer.accesscontrol.users=admin"
         - "traefik.enable=true"
-        - "traefik.http.routers.typebot_viewer.rule=Host(\`\${TYPEBOT_VIEWER_DOMAIN}\`)"
+        - "traefik.http.routers.typebot_viewer.rule=Host(\`${TYPEBOT_VIEWER_DOMAIN}\`)"
         - "traefik.http.routers.typebot_viewer.entrypoints=websecure"
         - "traefik.http.routers.typebot_viewer.tls.certresolver=letsencryptresolver"
         - "traefik.http.services.typebot_viewer.loadbalancer.server.port=3000"
@@ -688,9 +685,9 @@ services:
         - "traefik.http.routers.typebot_viewer.service=typebot_viewer"
 
 networks:
-  \${REDE_DOCKER}:
+  ${REDE_DOCKER}:
     external: true
-    name: \${REDE_DOCKER}
+    name: ${REDE_DOCKER}
 EOL
 }
 
@@ -703,14 +700,14 @@ services:
     image: atendai/evolution-api:latest
 
     volumes:
-      - \${EVOLUTION_VOLUME}:/evolution/instances
+      - ${EVOLUTION_VOLUME}:/evolution/instances
 
     networks:
-      - \${REDE_DOCKER}
+      - ${REDE_DOCKER}
 
     environment:
-      - SERVER_URL=https://\${EVOLUTION_DOMAIN}
-      - AUTHENTICATION_API_KEY=\${EVOLUTION_API_KEY}
+      - SERVER_URL=https://${EVOLUTION_DOMAIN}
+      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY}
       - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
       - DEL_INSTANCE=false
       - QRCODE_LIMIT=1902
@@ -722,7 +719,7 @@ services:
 
       - DATABASE_ENABLED=true
       - DATABASE_PROVIDER=postgresql
-      - DATABASE_CONNECTION_URI=postgresql://postgres:\${POSTGRES_PASSWORD}@postgres:5432/evolution
+      - DATABASE_CONNECTION_URI=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/evolution
       - DATABASE_CONNECTION_CLIENT_NAME=evolution
       - DATABASE_SAVE_DATA_INSTANCE=true
       - DATABASE_SAVE_DATA_NEW_MESSAGE=true
@@ -740,7 +737,7 @@ services:
       - CHATWOOT_ENABLED=true
       - CHATWOOT_MESSAGE_READ=true
       - CHATWOOT_MESSAGE_DELETE=true
-      - CHATWOOT_IMPORT_DATABASE_CONNECTION_URI=postgresql://postgres:\${POSTGRES_PASSWORD}@postgres:5432/chatwoot?sslmode=disable
+      - CHATWOOT_IMPORT_DATABASE_CONNECTION_URI=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/chatwoot?sslmode=disable
 
       - CACHE_REDIS_ENABLED=true
       - CACHE_REDIS_URI=redis://redis:6379
@@ -749,11 +746,11 @@ services:
       - CACHE_LOCAL_ENABLED=false
 
       - S3_ENABLED=true
-      - S3_ACCESS_KEY=\${MINIO_ROOT_USER}
-      - S3_SECRET_KEY=\${MINIO_ROOT_PASSWORD}
+      - S3_ACCESS_KEY=${MINIO_ROOT_USER}
+      - S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
       - S3_BUCKET=evolution
       - S3_PORT=443
-      - S3_ENDPOINT=https://\${MINIO_S3_DOMAIN}
+      - S3_ENDPOINT=https://${MINIO_S3_DOMAIN}
       - S3_USE_SSL=true
 
       - WA_BUSINESS_TOKEN_WEBHOOK=evolution
@@ -796,7 +793,7 @@ services:
           - node.role == manager
       labels:
         - "traefik.enable=1"
-        - "traefik.http.routers.evolution.rule=Host(\`\${EVOLUTION_DOMAIN}\`)"
+        - "traefik.http.routers.evolution.rule=Host(\`${EVOLUTION_DOMAIN}\`)"
         - "traefik.http.routers.evolution.entrypoints=websecure"
         - "traefik.http.routers.evolution.priority=1"
         - "traefik.http.routers.evolution.tls.certresolver=letsencryptresolver"
@@ -805,14 +802,14 @@ services:
         - "traefik.http.services.evolution.loadbalancer.passHostHeader=true"
 
 volumes:
-  \${EVOLUTION_VOLUME}:
+  ${EVOLUTION_VOLUME}:
     external: true
-    name: \${EVOLUTION_VOLUME}
+    name: ${EVOLUTION_VOLUME}
 
 networks:
-  \${REDE_DOCKER}:
+  ${REDE_DOCKER}:
     external: true
-    name: \${REDE_DOCKER}
+    name: ${REDE_DOCKER}
 EOL
 }
 
@@ -829,7 +826,7 @@ main() {
     echo "██║     ███████╗ ╚██████╔╝██║  ██╗███████╗██║   ██     ███████║███████╗   ██║   ╚██████╔╝██║     "
     echo "╚═╝     ╚══════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝    ██     ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝     "
     echo -e "${RESET}"
-    echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS (YAMLs ATUALIZADOS)${RESET}"
+    echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS (YAMLs CORRIGIDOS)${RESET}"
 
     # --- COLETA DE DADOS DO USUÁRIO COM VALIDAÇÃO ---
     msg_header "COLETANDO INFORMAÇÕES"

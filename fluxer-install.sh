@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #-------------------------------------------------------------------------------
-# Script: Instalador de Ambiente Fluxer (Corrigido v2)
+# Script: Instalador de Ambiente Fluxer (Corrigido v3)
 # Descrição: Implementa a lógica de instalação do SetupOrion,
 #            com drop/criação de bancos de dados para garantir ambiente limpo.
 # Autor: Humberley / Gemini
@@ -432,9 +432,9 @@ services:
       - N8N_REINSTALL_MISSING_PACKAGES=true
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
       - N8N_NODE_PATH=/home/node/.n8n/nodes
-      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true # Adicionado para corrigir aviso de permissões
-      - N8N_RUNNERS_ENABLED=true # Adicionado para corrigir depreciação
-      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true # Adicionado para corrigir depreciação
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RUNNERS_ENABLED=true
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
 
       - N8N_SMTP_SENDER=${SMTP_USER}
       - N8N_SMTP_USER=${SMTP_USER}
@@ -446,7 +446,7 @@ services:
       - QUEUE_BULL_REDIS_HOST=redis
       - QUEUE_BULL_REDIS_PORT=6379
       - QUEUE_BULL_REDIS_DB=2
-      - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash,moment-with-locales
+      - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash # 'moment-with-locales' removido
       - EXECUTIONS_DATA_PRUNE=true
       - EXECUTIONS_DATA_MAX_AGE=336
 
@@ -495,9 +495,9 @@ services:
       - N8N_REINSTALL_MISSING_PACKAGES=true
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
       - N8N_NODE_PATH=/home/node/.n8n/nodes
-      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true # Adicionado para corrigir aviso de permissões
-      - N8N_RUNNERS_ENABLED=true # Adicionado para corrigir depreciação
-      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true # Adicionado para corrigir depreciação
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RUNNERS_ENABLED=true
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
 
       - N8N_SMTP_SENDER=${SMTP_USER}
       - N8N_SMTP_USER=${SMTP_USER}
@@ -509,7 +509,7 @@ services:
       - QUEUE_BULL_REDIS_HOST=redis
       - QUEUE_BULL_REDIS_PORT=6379
       - QUEUE_BULL_REDIS_DB=2
-      - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash,moment-with-locales
+      - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash # 'moment-with-locales' removido
       - EXECUTIONS_DATA_PRUNE=true
       - EXECUTIONS_DATA_MAX_AGE=336
 
@@ -558,9 +558,9 @@ services:
       - N8N_REINSTALL_MISSING_PACKAGES=true
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
       - N8N_NODE_PATH=/home/node/.n8n/nodes
-      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true # Adicionado para corrigir aviso de permissões
-      - N8N_RUNNERS_ENABLED=true # Adicionado para corrigir depreciação
-      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true # Adicionado para corrigir depreciação
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RUNNERS_ENABLED=true
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
 
       - N8N_SMTP_SENDER=${SMTP_USER}
       - N8N_SMTP_USER=${SMTP_USER}
@@ -572,7 +572,7 @@ services:
       - QUEUE_BULL_REDIS_HOST=redis
       - QUEUE_BULL_REDIS_PORT=6379
       - QUEUE_BULL_REDIS_DB=2
-      - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash,moment-with-locales
+      - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash # 'moment-with-locales' removido
       - EXECUTIONS_DATA_PRUNE=true
       - EXECUTIONS_DATA_MAX_AGE=336
 
@@ -936,15 +936,15 @@ create_databases() {
     msg_success "Postgres está pronto!"
 
     echo "Limpando e recriando banco de dados 'n8n_queue'..."
-    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS n8n_queue WITH (FORCE);" # Adicionado FORCE para garantir o drop
+    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS n8n_queue WITH (FORCE);"
     docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE n8n_queue;"
     
     echo "Limpando e recriando banco de dados 'typebot'..."
-    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS typebot WITH (FORCE);" # Adicionado FORCE
+    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS typebot WITH (FORCE);"
     docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE typebot;"
 
     echo "Limpando e recriando banco de dados 'evolution'..."
-    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS evolution WITH (FORCE);" # Adicionado FORCE
+    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS evolution WITH (FORCE);"
     docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE evolution;"
     
     msg_success "Bancos de dados redefinidos com sucesso."
@@ -1032,7 +1032,10 @@ main() {
     # --- PREPARAÇÃO DO AMBIENTE SWARM ---
     msg_header "PREPARANDO O AMBIENTE SWARM"
     echo "Garantindo a existência da rede Docker overlay '${REDE_DOCKER}'..."; docker network rm "$REDE_DOCKER" >/dev/null 2>&1; docker network create --driver=overlay --attachable "$REDE_DOCKER" || msg_fatal "Falha ao criar a rede overlay '${REDE_DOCKER}'."; msg_success "Rede '${REDE_DOCKER}' pronta."
-    echo "Criando os volumes Docker..."; 
+    echo "Criando os volumes Docker...";
+    # Remover o volume do Postgres para garantir um ambiente limpo
+    echo "Removendo volume '${POSTGRES_VOLUME}' para garantir ambiente limpo..."; docker volume rm "${POSTGRES_VOLUME}" >/dev/null 2>&1
+    
     docker volume create "portainer_data" >/dev/null
     docker volume create "volume_swarm_certificates" >/dev/null
     docker volume create "volume_swarm_shared" >/dev/null

@@ -5,7 +5,7 @@
 # Descrição: Coleta as informações do usuário, prepara o ambiente Docker Swarm
 #            e inicia os serviços através da API do Portainer para gestão centralizada.
 # Autor: Humberley / [Seu Nome]
-# Versão: 4.5 (Solução Definitiva com Rede Robusta)
+# Versão: 4.6 (Solução Definitiva com Pré-processamento Total)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -176,12 +176,17 @@ main() {
     # ETAPA 1: Implantar serviços base via CLI
     for stack_name in "${DEPLOY_ORDER_CLI[@]}"; do
         local template_file="${STACKS_DIR}/${stack_name}/${stack_name}.template.yml"
+        local processed_file="${PROCESSED_DIR}/${stack_name}.yml"
+
         if [ ! -f "$template_file" ]; then msg_warning "Ficheiro para '${stack_name}' não encontrado. A saltar."; continue; fi
         
         echo "-----------------------------------------------------"
-        echo "Implantando o stack base: ${NEGRITO}${stack_name}${RESET}..."
+        echo "Processando e implantando o stack base: ${NEGRITO}${stack_name}${RESET}..."
         
-        if docker stack deploy --compose-file "$template_file" "$stack_name"; then
+        # Substitui as variáveis no ficheiro de template antes de o implantar
+        envsubst < "$template_file" > "$processed_file"
+
+        if docker stack deploy --compose-file "$processed_file" "$stack_name"; then
             msg_success "Stack '${stack_name}' implantado com sucesso!"
         else
             msg_error "Houve um problema ao implantar o stack '${stack_name}'."
@@ -241,7 +246,7 @@ main() {
         envsubst < "$template_file" > "$processed_file"
         local COMPOSE_CONTENT=$(cat "$processed_file")
 
-        # Cria o payload JSON para a API do Portainer (sem a chave SwarmID)
+        # Cria o payload JSON para a API do Portainer
         local JSON_PAYLOAD=$(jq -n \
             --arg name "$stack_name" \
             --arg content "$COMPOSE_CONTENT" \

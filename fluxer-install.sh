@@ -5,7 +5,7 @@
 # Descrição: Coleta as informações do usuário, gera o .env e inicia cada
 #            serviço como uma stack individual no Docker Swarm.
 # Autor: Humberley / [Seu Nome]
-# Versão: 3.3 (Corrige erro de sintaxe YML)
+# Versão: 3.4 (Corrige erro de sintaxe YML de forma robusta)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -145,7 +145,7 @@ main() {
     docker volume create "volume_swarm_shared" >/dev/null
     msg_success "Volumes prontos."
 
-    # --- ADAPTANDO FICHEIROS DE CONFIGURAÇÃO (NOVA ETAPA) ---
+    # --- ADAPTANDO FICHEIROS DE CONFIGURAÇÃO (ETAPA CORRIGIDA) ---
     msg_header "ADAPTANDO FICHEIROS DE CONFIGURAÇÃO"
     
     local STACKS_DIR="stacks"
@@ -155,14 +155,12 @@ main() {
         # Esta etapa remove essas secções para evitar erros de sintaxe.
         echo "Adaptando o ficheiro: ${file}..."
         tmp_file=$(mktemp)
-        # Usa awk para remover as secções de topo 'volumes:' e 'networks:' de forma robusta
+        # Usa awk para imprimir apenas até encontrar uma chave de topo "volumes:" ou "networks:"
         awk '
-            # Se encontrarmos uma chave de topo "volumes:" ou "networks:", ativamos o modo de saltar
-            /^volumes:|^networks:/ { skip=1; next }
-            # Se estivermos a saltar e encontrarmos uma linha que NÃO está indentada, paramos de saltar
-            skip && !/^[ \t]/ { skip=0 }
-            # Se não estivermos a saltar, imprimimos a linha
-            !skip { print }
+            # Se encontrarmos uma chave de topo "volumes:" ou "networks:", paramos de processar.
+            /^(volumes|networks):/ { exit }
+            # Caso contrário, imprimimos a linha.
+            { print }
         ' "$file" > "$tmp_file"
         mv "$tmp_file" "$file"
     done

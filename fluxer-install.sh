@@ -5,7 +5,7 @@
 # Descrição: Implementa a lógica de instalação robusta do SetupOrion,
 #            incluindo preparação, deploy, verificação e configuração em etapas.
 # Autor: Humberley / [Seu Nome]
-# Versão: 10.1 (YAML embutido para robustez)
+# Versão: 10.2 (Corrige a geração de YAML)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -83,16 +83,6 @@ validate_email() {
         msg_warning "Formato de e-mail inválido. Por favor, insira um e-mail válido."
         return 1
     fi
-}
-
-# Valida se a entrada não contém espaços ou caracteres especiais perigosos
-validate_simple_text() {
-    local text=$1
-    if [[ $text =~ [[:space:]] || ! $text =~ ^[a-zA-Z0-9_-]+$ ]]; then
-        msg_warning "Entrada inválida. Não use espaços ou caracteres especiais (apenas letras, números, - e _)."
-        return 1
-    fi
-    return 0
 }
 
 # Verifica a propagação do DNS
@@ -212,6 +202,16 @@ services:
       placement:
         constraints:
           - node.role == manager
+
+networks:
+  ${REDE_DOCKER}:
+    external: true
+    name: ${REDE_DOCKER}
+
+volumes:
+  volume_swarm_certificates:
+    external: true
+    name: volume_swarm_certificates
 EOL
     docker stack deploy --compose-file /tmp/traefik.yml traefik || msg_fatal "Falha ao implantar Traefik."
     msg_success "Stack 'traefik' implantado."
@@ -262,6 +262,7 @@ volumes:
 networks:
   ${REDE_DOCKER}:
     external: true
+    name: ${REDE_DOCKER}
 EOL
     docker stack deploy --compose-file /tmp/portainer.yml portainer || msg_fatal "Falha ao implantar Portainer."
     msg_success "Stack 'portainer' implantado."

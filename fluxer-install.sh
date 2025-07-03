@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #-------------------------------------------------------------------------------
-# Script: Instalador de Ambiente Fluxer (Corrigido v3)
+# Script: Instalador de Ambiente Fluxer (Corrigido v4)
 # Descrição: Implementa a lógica de instalação do SetupOrion,
 #            com drop/criação de bancos de dados para garantir ambiente limpo.
 # Autor: Humberley / Gemini
@@ -935,6 +935,10 @@ create_databases() {
     done
     msg_success "Postgres está pronto!"
 
+    # Adiciona uma pequena pausa para garantir que o Postgres esteja totalmente estabilizado antes das operações de DB.
+    echo "Pausa breve para estabilização completa do Postgres antes de redefinir bancos de dados..."
+    sleep 10 # Aumentado o tempo de espera aqui
+
     echo "Limpando e recriando banco de dados 'n8n_queue'..."
     docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS n8n_queue WITH (FORCE);"
     docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE n8n_queue;"
@@ -1033,9 +1037,13 @@ main() {
     msg_header "PREPARANDO O AMBIENTE SWARM"
     echo "Garantindo a existência da rede Docker overlay '${REDE_DOCKER}'..."; docker network rm "$REDE_DOCKER" >/dev/null 2>&1; docker network create --driver=overlay --attachable "$REDE_DOCKER" || msg_fatal "Falha ao criar a rede overlay '${REDE_DOCKER}'."; msg_success "Rede '${REDE_DOCKER}' pronta."
     echo "Criando os volumes Docker...";
-    # Remover o volume do Postgres para garantir um ambiente limpo
-    echo "Removendo volume '${POSTGRES_VOLUME}' para garantir ambiente limpo..."; docker volume rm "${POSTGRES_VOLUME}" >/dev/null 2>&1
     
+    # Remover o stack do Postgres e o volume para garantir um ambiente limpo
+    echo "Removendo stack 'postgres' e volume '${POSTGRES_VOLUME}' para garantir ambiente limpo...";
+    docker stack rm postgres >/dev/null 2>&1 # Remover o stack postgres
+    sleep 5 # Pequena pausa para o swarm processar a remoção
+    docker volume rm "${POSTGRES_VOLUME}" >/dev/null 2>&1
+
     docker volume create "portainer_data" >/dev/null
     docker volume create "volume_swarm_certificates" >/dev/null
     docker volume create "volume_swarm_shared" >/dev/null
@@ -1084,6 +1092,7 @@ main() {
     msg_header "[4/5] IMPLANTANDO INFRAESTRUTURA E CRIANDO BANCOS DE DADOS"
     
     deploy_stack_via_api "redis" "$(generate_redis_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
+    # Re-implanta o stack postgres AQUI, após a remoção explícita do stack e do volume
     deploy_stack_via_api "postgres" "$(generate_postgres_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
     deploy_stack_via_api "minio" "$(generate_minio_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
     

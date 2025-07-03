@@ -3,10 +3,9 @@
 #-------------------------------------------------------------------------------
 # Script: Instalador de Ambiente Fluxer (Corrigido)
 # Descrição: Implementa a lógica de instalação do SetupOrion,
-#            utilizando as configurações YAML completas fornecidas nos
-#            arquivos .template.yml para máxima robustez e funcionalidades.
+#            com criação explícita de bancos de dados e correções de endpoint.
 # Autor: Humberley / Gemini
-# Versão: 13.1 (Final - YAMLs Corrigidos)
+# Versão: 13.2 (Final - Correção de DB e Endpoints)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -132,10 +131,11 @@ check_dns() {
 # Função para aguardar um serviço estar com réplicas 1/1
 wait_stack() {
     local stack_name=$1
-    echo -e "\n${NEGRITO}Aguardando o serviço ${stack_name} ficar online...${RESET}"
+    local service_name=$2
+    echo -e "\n${NEGRITO}Aguardando o serviço ${service_name} do stack ${stack_name} ficar online...${RESET}"
     while true; do
-        if docker service ls --filter "name=${stack_name}" | grep -q "1/1"; then
-            msg_success "Serviço ${stack_name} está online."
+        if docker service ls --filter "name=${stack_name}_${service_name}" | grep -q "1/1"; then
+            msg_success "Serviço ${stack_name}_${service_name} está online."
             break
         fi
         printf "."
@@ -314,6 +314,7 @@ services:
       - ${REDE_DOCKER}
 
     environment:
+      - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - PG_MAX_CONNECTIONS=500
 
@@ -750,7 +751,7 @@ services:
       - S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
       - S3_BUCKET=evolution
       - S3_PORT=443
-      - S3_ENDPOINT=https://${MINIO_S3_DOMAIN}
+      - S3_ENDPOINT=${MINIO_S3_DOMAIN}
       - S3_USE_SSL=true
 
       - WA_BUSINESS_TOKEN_WEBHOOK=evolution
@@ -813,6 +814,53 @@ networks:
 EOL
 }
 
+# Nova função para criar os bancos de dados
+create_databases() {
+    msg_header "CRIANDO BANCOS DE DADOS NO POSTGRES"
+    
+    local postgres_container_id
+    local retries=30
+    
+    echo "Aguardando o container do Postgres ser criado..."
+    while [[ -z "$postgres_container_id" && $retries -gt 0 ]]; do
+        postgres_container_id=$(docker ps -q -f name=postgres_postgres)
+        if [[ -z "$postgres_container_id" ]]; then
+            printf "."
+            sleep 5
+            ((retries--))
+        fi
+    done
+
+    if [[ -z "$postgres_container_id" ]]; then
+        msg_fatal "Container do Postgres não foi encontrado após 150 segundos."
+    fi
+    
+    msg_success "Container do Postgres encontrado: ${postgres_container_id}"
+    
+    echo "Aguardando o Postgres aceitar conexões..."
+    retries=30
+    while ! docker exec "$postgres_container_id" pg_isready -U postgres &>/dev/null; do
+        printf "."
+        sleep 5
+        ((retries--))
+        if [ $retries -le 0 ]; then
+            msg_fatal "Postgres não ficou pronto para aceitar conexões a tempo."
+        fi
+    done
+    msg_success "Postgres está pronto!"
+
+    echo "Criando banco de dados 'n8n_queue'..."
+    docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE n8n_queue;" || msg_warning "Não foi possível criar 'n8n_queue' (pode já existir)."
+    
+    echo "Criando banco de dados 'typebot'..."
+    docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE typebot;" || msg_warning "Não foi possível criar 'typebot' (pode já existir)."
+
+    echo "Criando banco de dados 'evolution'..."
+    docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE evolution;" || msg_warning "Não foi possível criar 'evolution' (pode já existir)."
+    
+    msg_success "Bancos de dados configurados."
+}
+
 
 # === FUNÇÃO PRINCIPAL ===
 main() {
@@ -826,7 +874,7 @@ main() {
     echo "██║     ███████╗ ╚██████╔╝██║  ██╗███████╗██║   ██     ███████║███████╗   ██║   ╚██████╔╝██║     "
     echo "╚═╝     ╚══════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝    ██     ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝     "
     echo -e "${RESET}"
-    echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS (YAMLs CORRIGIDOS)${RESET}"
+    echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS (v13.2)${RESET}"
 
     # --- COLETA DE DADOS DO USUÁRIO COM VALIDAÇÃO ---
     msg_header "COLETANDO INFORMAÇÕES"
@@ -862,7 +910,6 @@ main() {
     
     export REDE_DOCKER="fluxerNet"
     
-    # Exportando nomes dos volumes para consistência com os templates
     export POSTGRES_VOLUME="postgres_data"
     export REDIS_VOLUME="redis_data"
     export MINIO_VOLUME="minio_data"
@@ -886,20 +933,20 @@ main() {
     msg_success "Volumes prontos."
 
     # --- ETAPA 1: INSTALAR TRAEFIK E PORTAINER ---
-    msg_header "[1/4] INSTALANDO TRAEFIK E PORTAINER"
+    msg_header "[1/5] INSTALANDO TRAEFIK E PORTAINER"
     
     echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}...";
-    docker stack deploy --compose-file <(generate_traefik_yml) traefik || msg_fatal "Falha ao implantar Traefik."
+    docker stack deploy --compose-file <(echo "$(generate_traefik_yml)") traefik || msg_fatal "Falha ao implantar Traefik."
     msg_success "Stack 'traefik' implantado."
     
     echo "---"; echo "Implantando: ${NEGRITO}portainer${RESET}...";
-    docker stack deploy --compose-file <(generate_portainer_yml) portainer || msg_fatal "Falha ao implantar Portainer."
+    docker stack deploy --compose-file <(echo "$(generate_portainer_yml)") portainer || msg_fatal "Falha ao implantar Portainer."
     msg_success "Stack 'portainer' implantado."
 
     # --- ETAPA 2: VERIFICAR SERVIÇOS E CONFIGURAR PORTAINER ---
-    msg_header "[2/4] VERIFICANDO SERVIÇOS E CONFIGURANDO PORTAINER"
-    wait_stack "traefik_traefik"
-    wait_stack "portainer_portainer"
+    msg_header "[2/5] VERIFICANDO SERVIÇOS E CONFIGURANDO PORTAINER"
+    wait_stack "traefik" "traefik"
+    wait_stack "portainer" "portainer"
     
     echo "Aguardando 30 segundos para estabilização dos serviços..."; sleep 30
 
@@ -911,7 +958,7 @@ main() {
     if [ "$account_created" = false ]; then msg_fatal "Não foi possível criar a conta de administrador no Portainer."; fi
 
     # --- ETAPA 3: OBTER CHAVE DE API ---
-    msg_header "[3/4] OBTENDO CHAVE DE API DO PORTAINER"
+    msg_header "[3/5] OBTENDO CHAVE DE API DO PORTAINER"
     echo "A autenticar para obter token JWT..."; local jwt_response; jwt_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/auth" -H "Content-Type: application/json" --data "{\"username\": \"admin\", \"password\": \"${PORTAINER_PASSWORD}\"}"); local PORTAINER_JWT=$(echo "$jwt_response" | jq -r .jwt); if [[ -z "$PORTAINER_JWT" || "$PORTAINER_JWT" == "null" ]]; then msg_fatal "Falha ao obter o token JWT."; fi; msg_success "Token JWT obtido."
     
     echo "Decodificando token para obter o ID do utilizador..."; local USER_ID; USER_ID=$(echo "$PORTAINER_JWT" | cut -d. -f2 | base64 --decode 2>/dev/null | jq -r .id); if [[ -z "$USER_ID" || "$USER_ID" == "null" ]]; then msg_fatal "Falha ao extrair o ID do utilizador do token JWT."; fi; msg_success "ID do utilizador 'admin' é: ${USER_ID}"
@@ -920,15 +967,25 @@ main() {
 
     echo "Obtendo Swarm ID..."; local ENDPOINT_ID=1; local SWARM_ID; SWARM_ID=$(curl -s -k -H "X-API-Key: ${PORTAINER_API_KEY}" "https://${PORTAINER_DOMAIN}/api/endpoints/${ENDPOINT_ID}/docker/swarm" | jq -r .ID); if [[ -z "$SWARM_ID" || "$SWARM_ID" == "null" ]]; then msg_fatal "Falha ao obter o Swarm ID."; fi; msg_success "Swarm ID obtido: ${SWARM_ID}"
 
-    # --- ETAPA 4: IMPLANTAR STACKS DE APLICAÇÃO VIA API ---
-    msg_header "[4/4] IMPLANTANDO STACKS DE APLICAÇÃO"
+    # --- ETAPA 4: IMPLANTAR STACKS DE INFRAESTRUTURA E CRIAR DBS ---
+    msg_header "[4/5] IMPLANTANDO INFRAESTRUTURA E CRIANDO BANCOS DE DADOS"
     
     deploy_stack_via_api "redis" "$(generate_redis_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
     deploy_stack_via_api "postgres" "$(generate_postgres_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
     deploy_stack_via_api "minio" "$(generate_minio_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
+    
+    wait_stack "postgres" "postgres"
+    wait_stack "minio" "minio"
+
+    create_databases
+
+    # --- ETAPA 5: IMPLANTAR STACKS DE APLICAÇÃO ---
+    msg_header "[5/5] IMPLANTANDO STACKS DE APLICAÇÃO"
+
     deploy_stack_via_api "n8n" "$(generate_n8n_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
     deploy_stack_via_api "typebot" "$(generate_typebot_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
     deploy_stack_via_api "evolution" "$(generate_evolution_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
+
 
     # --- RESUMO FINAL ---
     msg_header "🎉 INSTALAÇÃO CONCLUÍDA 🎉"
@@ -946,6 +1003,7 @@ main() {
         echo -e "${NEGRITO}Utilizador root do MinIO:   ${MINIO_ROOT_USER}${RESET}"
         echo -e "${NEGRITO}Senha root do MinIO:     ${MINIO_ROOT_PASSWORD}${RESET}"
         echo -e "${NEGRITO}Chave da Evolution API:  ${EVOLUTION_API_KEY}${RESET}"
+        echo -e "${NEGRITO}Senha do Postgres:       ${POSTGRES_PASSWORD}${RESET}"
     fi
     echo; msg_success "Tudo pronto! Aproveite o seu novo ambiente de automação."
 }

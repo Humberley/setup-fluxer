@@ -1,228 +1,190 @@
 #!/bin/bash
 
-#-------------------------------------------------------------------------------
-# Script: Instalador de Ambiente Fluxer
-# Descrição: Coleta as informações do usuário, gera o .env e inicia cada
-#            serviço como uma stack individual no Docker Swarm, em ordem.
-# Autor: Humberley / [Seu Nome]
-# Versão: 3.7 (Pré-processa YMLs para robustez)
-#-------------------------------------------------------------------------------
+# --- Definições de Cores e Estilos ---
+# Usar tput para maior compatibilidade e para verificar se o terminal suporta cores.
+if tput setaf 1 >&/dev/null; then
+    VERDE=$(tput setaf 2; tput bold)
+    AZUL=$(tput setaf 4; tput bold)
+    AMARELO=$(tput setaf 3)
+    VERMELHO=$(tput setaf 1; tput bold)
+    NEGRITO=$(tput bold)
+    RESET=$(tput sgr0)
+else
+    VERDE=""
+    AZUL=""
+    AMARELO=""
+    VERMELHO=""
+    NEGRITO=""
+    RESET=""
+fi
 
-# === VARIÁVEIS DE CORES E ESTILOS ===
-VERDE='\033[1;32m'
-AZUL='\033[1;34m'
-AMARELO='\033[1;33m'
-VERMELHO='\033[1;31m'
-NEGRITO='\033[1m'
-RESET='\033[0m'
+# --- Funções Modulares ---
 
-# === FUNÇÕES AUXILIARES ===
-msg_header() {
-    echo -e "\n${AZUL}${NEGRITO}# $1${RESET}"
-}
-msg_success() {
-    echo -e "${VERDE}✔ $1${RESET}"
-}
-msg_warning() {
-    echo -e "${AMARELO}⚠️ $1${RESET}"
-}
-msg_error() {
-    echo -e "${VERMELHO}❌ ERRO: $1${RESET}"
-    exit 1
-}
-
-# === FUNÇÃO PRINCIPAL ===
-main() {
+# Exibe o banner inicial e as instruções de DNS.
+display_banner() {
     clear
-    # --- BANNER ---
-    echo -e "${AZUL}${NEGRITO}"
-    echo "███████╗██╗     ██╗   ██╗██╗  ██╗███████╗██████╗      ███████╗███████╗████████╗██╗  ██╗██████╗ "
-    echo "██╔════╝██║     ██║   ██║██║ ██╔╝██╔════╝██╔══██╗     ██╔════╝██╔════╝╚══██╔══╝██║  ██║██╔══██╗"
-    echo "█████╗  ██║     ██║   ██║█████╔╝ █████╗  ██████╔╝     ███████╗█████╗     ██║   ██║  ██║██████╔╝"
-    echo "██╔══╝  ██║     ██║   ██║██╔═██╗ ██╔══╝  ██╔══╝██     ╚════██║██╔══╝     ██║   ██║  ██║██╔═══╝ "
-    echo "██║     ███████╗ ╚██████╔╝██║  ██╗███████╗██║   ██     ███████║███████╗   ██║   ╚██████╔╝██║     "
-    echo "╚═╝     ╚══════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝    ██     ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝     "
+    echo -e "${AZUL}"
+    echo "███████╗██╗      ██╗   ██ ██╗  ██╗███████╗██████╗     ███████╗███████╗████████╗██╗  ██╗██████╗ "
+    echo "██╔════╝██║      ██║   ██ ║██║ ██╔╝██╔════╝██╔══██╗    ██╔════╝██╔════╝╚══██╔══╝██║  ██║██╔══██╗"
+    echo "█████╗  ██║      ██║   ██ ║█████╔╝ █████╗  ██████╔╝    ███████╗█████╗     ██║   ██║  ██║██████╔╝"
+    echo "██╔══╝  ██║      ██║   ██ ║██╔═██╗ ██╔══╝  ██╔══╝██    ╚════██║██╔══╝     ██║   ██║  ██║██╔═══╝ "
+    echo "██      ███████╗╚██████╔╝██║  ██╗███████╗██║   ██    ███████║███████╗   ██║   ╚██████╔╝██║     "
+    echo "╚═╝     ╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝    ╚═╝   ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝     "
     echo -e "${RESET}"
-    echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS${RESET}"
-
-    # --- VERIFICAÇÃO DE DEPENDÊNCIAS ---
-    msg_header "VERIFICANDO DEPENDÊNCIAS"
-    if ! command -v envsubst &> /dev/null; then
-        msg_warning "Comando 'envsubst' não encontrado. A instalar 'gettext-base'..."
-        apt-get update -qq && apt-get install -y gettext-base -qq || msg_error "Falha ao instalar 'gettext-base'."
-    fi
-    msg_success "Dependências prontas."
-
-    # --- VERIFICAÇÃO DO DOCKER SWARM ---
-    msg_header "VERIFICANDO AMBIENTE DOCKER SWARM"
-    if ! docker info 2>/dev/null | grep -q "Swarm: active"; then
-        msg_warning "Docker Swarm não está ativo. A inicializar..."
-        if ! docker swarm init; then
-            msg_error "Falha ao inicializar o Docker Swarm."
-        fi
-    fi
-    msg_success "Docker Swarm está ativo."
-
-    # --- INSTRUÇÕES DNS ---
-    msg_header "CONFIGURAÇÃO DNS (WILDCARD)"
-    msg_warning "Antes de continuar, configure um registo DNS WILDCARD na sua Cloudflare:"
-    echo -e "${NEGRITO}  Tipo:   A"
-    echo -e "  Nome:   *"
-    echo -e "  IP:     (O IP desta VPS)"
-    echo -e "  Proxy:  DNS only (nuvem cinza, desativado)${RESET}"
-    echo
-    read -p "Pressione [Enter] para continuar após configurar o DNS..." < /dev/tty
-
-    # --- COLETA DE DADOS DO USUÁRIO ---
-    msg_header "COLETANDO INFORMAÇÕES"
-
-    while [[ -z "$DOMINIO_RAIZ" ]]; do
-        read -p "🌐 Qual é o seu domínio principal (ex: seudominio.com.br): " DOMINIO_RAIZ < /dev/tty
-    done
-
-    while [[ -z "$LE_EMAIL" ]]; do
-        read -p "📧 Email para o certificado SSL (Let's Encrypt): " LE_EMAIL < /dev/tty
-    done
-
-    while true; do
-        read -s -p "🔑 Digite uma senha para o Portainer: " PORTAINER_PASSWORD < /dev/tty; echo
-        read -s -p "🔑 Confirme a senha do Portainer: " PORTAINER_PASSWORD_CONFIRM < /dev/tty; echo
-        if [[ "$PORTAINER_PASSWORD" == "$PORTAINER_PASSWORD_CONFIRM" ]] && [[ -n "$PORTAINER_PASSWORD" ]]; then
-            break
-        else
-            msg_warning "As senhas não coincidem ou estão vazias. Tente novamente."
-        fi
-    done
-
-    while [[ -z "$MINIO_ROOT_USER" ]]; do
-        read -p "👤 Utilizador root para o MinIO: " MINIO_ROOT_USER < /dev/tty
-    done
-    while true; do
-        read -s -p "🔑 Digite uma senha para o MinIO: " MINIO_ROOT_PASSWORD < /dev/tty; echo
-        read -s -p "🔑 Confirme a senha do MinIO: " MINIO_ROOT_PASSWORD_CONFIRM < /dev/tty; echo
-        if [[ "$MINIO_ROOT_PASSWORD" == "$MINIO_ROOT_PASSWORD_CONFIRM" ]] && [[ -n "$MINIO_ROOT_PASSWORD" ]]; then
-            break
-        else
-            msg_warning "As senhas não coincidem ou estão vazias. Tente novamente."
-        fi
-    done
-
-    # --- GERAÇÃO DE VARIÁVEIS E SUBDOMÍNIOS ---
-    msg_header "GERANDO CONFIGURAÇÕES"
-    echo "Gerando subdomínios e chaves de segurança..."
-
-    export DOMINIO_RAIZ LE_EMAIL PORTAINER_PASSWORD MINIO_ROOT_USER MINIO_ROOT_PASSWORD
-
-    export PORTAINER_DOMAIN="portainer.${DOMINIO_RAIZ}"
-    export N8N_EDITOR_DOMAIN="n8n.${DOMINIO_RAIZ}"
-    export N8N_WEBHOOK_DOMAIN="nwn.${DOMINIO_RAIZ}"
-    export TYPEBOT_EDITOR_DOMAIN="tpb.${DOMINIO_RAIZ}"
-    export TYPEBOT_VIEWER_DOMAIN="tpv.${DOMINIO_RAIZ}"
-    export MINIO_CONSOLE_DOMAIN="minio.${DOMINIO_RAIZ}"
-    export MINIO_S3_DOMAIN="s3.${DOMINIO_RAIZ}"
-    export EVOLUTION_DOMAIN="evo.${DOMINIO_RAIZ}"
-
-    export POSTGRES_PASSWORD=$(openssl rand -hex 16)
-    export N8N_ENCRYPTION_KEY=$(openssl rand -hex 16)
-    export TYPEBOT_ENCRYPTION_KEY=$(openssl rand -hex 16)
-    export EVOLUTION_API_KEY=$(openssl rand -hex 16)
-    
-    export PORTAINER_VOLUME="portainer_data"
-    export POSTGRES_VOLUME="postgres_data"
-    export REDIS_VOLUME="redis_data"
-    export MINIO_VOLUME="minio_data"
-    export EVOLUTION_VOLUME="evolution_instances"
-    export REDE_DOCKER="fluxerNet"
-    
-    msg_success "Configurações geradas e exportadas para o ambiente."
-
-    # --- PREPARAÇÃO DO AMBIENTE SWARM ---
-    msg_header "PREPARANDO O AMBIENTE SWARM"
-    
-    echo "Criando a rede Docker overlay (se não existir)..."
-    docker network create --driver=overlay --attachable "$REDE_DOCKER" >/dev/null 2>&1
-    msg_success "Rede '${REDE_DOCKER}' pronta."
-
-    echo "Criando os volumes Docker (se não existirem)..."
-    docker volume create "$PORTAINER_VOLUME" >/dev/null
-    docker volume create "$POSTGRES_VOLUME" >/dev/null
-    docker volume create "$REDIS_VOLUME" >/dev/null
-    docker volume create "$MINIO_VOLUME" >/dev/null
-    docker volume create "$EVOLUTION_VOLUME" >/dev/null
-    docker volume create "volume_swarm_certificates" >/dev/null
-    docker volume create "volume_swarm_shared" >/dev/null
-    msg_success "Volumes prontos."
-
-    # --- INICIANDO OS STACKS INDIVIDUALMENTE (EM ORDEM CORRETA) ---
-    msg_header "INICIANDO OS STACKS DE SERVIÇOS"
-    
-    local STACKS_DIR="stacks"
-    local PROCESSED_DIR="processed_stacks"
-    mkdir -p "$PROCESSED_DIR"
-
-    # Define a ordem correta de implantação para garantir que as dependências sejam satisfeitas
-    local DEPLOY_ORDER=(
-        "traefik"
-        "redis"
-        "postgres"
-        "portainer"
-        "minio"
-        "n8n"
-        "typebot"
-        "evolution"
-    )
-
-    for stack_name in "${DEPLOY_ORDER[@]}"; do
-        local template_file="${STACKS_DIR}/${stack_name}/${stack_name}.template.yml"
-        local processed_file="${PROCESSED_DIR}/${stack_name}.yml"
-        
-        if [ ! -f "$template_file" ]; then
-            msg_warning "Ficheiro de template para o stack '${stack_name}' não encontrado. A saltar."
-            continue
-        fi
-
-        echo "-----------------------------------------------------"
-        echo "Processando e implantando o stack: ${NEGRITO}${stack_name}${RESET}..."
-        
-        # Usa envsubst para substituir as variáveis de ambiente e guarda o resultado
-        envsubst < "$template_file" > "$processed_file"
-
-        # Executa o docker stack deploy para o ficheiro processado
-        if docker stack deploy --compose-file "$processed_file" "$stack_name"; then
-            msg_success "Stack '${stack_name}' implantado com sucesso!"
-        else
-            msg_error "Houve um problema ao implantar o stack '${stack_name}'."
-        fi
-    done
-    
-    # Limpa os ficheiros processados
-    rm -rf "$PROCESSED_DIR"
-
-    # --- RESUMO FINAL ---
-    msg_header "🎉 INSTALAÇÃO CONCLUÍDA 🎉"
-    echo "Aguarde alguns minutos para que todos os serviços sejam iniciados."
-    echo "Pode verificar o estado com o comando: ${NEGRITO}docker service ls${RESET}"
-    echo "Abaixo estão os seus links de acesso:"
-    echo
-    echo -e "${NEGRITO}Painel Portainer:   https://${PORTAINER_DOMAIN}${RESET}"
-    echo -e "${NEGRITO}Painel n8n (editor):  https://${N8N_EDITOR_DOMAIN}${RESET}"
-    echo -e "${NEGRITO}Builder Typebot:      https://${TYPEBOT_EDITOR_DOMAIN}${RESET}"
-    echo -e "${NEGRITO}MinIO Painel:         https://${MINIO_CONSOLE_DOMAIN}${RESET}"
-    echo -e "${NEGRITO}Evolution API:        https://${EVOLUTION_DOMAIN}${RESET}"
+    echo -e "${VERDE}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS${RESET}"
     echo
 
-    read -p "Deseja exibir as senhas e chaves geradas? (s/N): " SHOW_CREDS < /dev/tty
-    if [[ "$SHOW_CREDS" =~ ^[Ss]$ ]]; then
-        echo
-        msg_header "CREDENCIAS GERADAS (guarde em local seguro)"
-        echo -e "${NEGRITO}Senha do Portainer:      ${PORTAINER_PASSWORD}${RESET}"
-        echo -e "${NEGRITO}Utilizador root do MinIO:   ${MINIO_ROOT_USER}${RESET}"
-        echo -e "${NEGRITO}Senha root do MinIO:     ${MINIO_ROOT_PASSWORD}${RESET}"
-        echo -e "${NEGRITO}Chave da Evolution API:  ${EVOLUTION_API_KEY}${RESET}"
-    fi
+    echo -e "${AZUL}${NEGRITO}🌐 ANTES DE CONTINUAR:${RESET}"
+    echo -e "${AMARELO}Configure um registro DNS WILDCARD na sua Cloudflare assim:${RESET}"
+    echo -e "${NEGRITO}Tipo:    A${RESET}"
+    echo -e "${NEGRITO}Nome:    *${RESET}"
+    echo -e "${NEGRITO}IP:      (mesmo IP desta VPS)${RESET}"
+    echo -e "${NEGRITO}Proxy:   DNS only (⚠️ desativado)${RESET}"
     echo
-    msg_success "Tudo pronto! Aproveite o seu novo ambiente de automação."
+    echo -e "${AZUL}Isso permitirá que os seguintes subdomínios funcionem automaticamente:${RESET}"
+    echo -e "  • portainer"
+    echo -e "  • n8n, nwn (webhook)"
+    echo -e "  • tpb, tpv (typebot)"
+    echo -e "  • minio, s3"
+    echo -e "  • evo (evolution api)"
+    echo
 }
 
-# --- PONTO DE ENTRADA DO SCRIPT ---
+# Coleta todas as entradas necessárias do usuário com validação.
+get_user_input() {
+    # Valida a entrada para garantir que não esteja vazia.
+    while]; do
+        read -p "🌐 Qual é o domínio principal (ex: fluxer.com.br): " DOMINIO_RAIZ
+        if]; then
+            echo -e "${VERMELHO}O domínio não pode ser vazio. Por favor, tente novamente.${RESET}"
+        fi
+    done
+
+    while]; do
+        read -s -p "🔑 Defina uma senha para o Portainer: " PORTAINER_PASSWORD
+        echo
+        if]; then
+            echo -e "${VERMELHO}A senha do Portainer não pode ser vazia.${RESET}"
+        fi
+    done
+
+    read -p "👤 Usuário root do MinIO (padrão: admin): " MINIO_ROOT_USER
+    MINIO_ROOT_USER=${MINIO_ROOT_USER:-admin} # Define 'admin' como padrão se a entrada for vazia
+
+    while]; do
+        read -s -p "🔑 Defina uma senha para o MinIO: " MINIO_ROOT_PASSWORD
+        echo
+        if]; then
+            echo -e "${VERMELHO}A senha do MinIO não pode ser vazia.${RESET}"
+        fi
+    done
+
+    read -p "🔑 Chave da Evolution API (pressione Enter para gerar uma aleatória): " EVOLUTION_API_KEY_INPUT
+    # Gera uma chave aleatória se o usuário não fornecer uma.
+    if]; then
+        EVOLUTION_API_KEY=$(openssl rand -hex 32)
+        echo -e "${AMARELO}Nenhuma chave fornecida. Uma chave segura foi gerada para a Evolution API.${RESET}"
+    else
+        EVOLUTION_API_KEY="$EVOLUTION_API_KEY_INPUT"
+    fi
+}
+
+# Gera o arquivo.env com base nas entradas coletadas.
+generate_env_file() {
+    echo -e "\n${AZUL}📄 Gerando arquivo.env...${RESET}"
+
+    # Gera subdomínios automaticamente com base no domínio raiz.
+    PORTAINER_DOMAIN="portainer.${DOMINIO_RAIZ}"
+    N8N_EDITOR_DOMAIN="n8n.${DOMINIO_RAIZ}"
+    N8N_WEBHOOK_DOMAIN="nwn.${DOMINIO_RAIZ}"
+    TYPEBOT_EDITOR_DOMAIN="tpb.${DOMINIO_RAIZ}"
+    TYPEBOT_VIEWER_DOMAIN="tpv.${DOMINIO_RAIZ}"
+    MINIO_CONSOLE_DOMAIN="minio.${DOMINIO_RAIZ}"
+    MINIO_S3_DOMAIN="s3.${DOMINIO_RAIZ}"
+    EVOLUTION_DOMAIN="evo.${DOMINIO_RAIZ}"
+
+    # Usa um Heredoc para criar o arquivo.env de uma só vez.
+    # As variáveis são citadas para segurança e robustez.
+    cat >.env <<EOF
+# --- Rede e Certificados ---
+REDE_DOCKER=fluxerNet
+LE_EMAIL=fluxerautoma@gmail.com
+
+# --- Portainer ---
+PORTAINER_DOMAIN="${PORTAINER_DOMAIN}"
+PORTAINER_PASSWORD="${PORTAINER_PASSWORD}"
+PORTAINER_VOLUME=portainer_data
+
+# --- PostgreSQL (usado por n8n e Typebot) ---
+POSTGRES_PASSWORD=$(openssl rand -hex 16)
+POSTGRES_VOLUME=postgres_data
+
+# --- Redis (usado por n8n) ---
+REDIS_VOLUME=redis_data
+REDIS_URI=redis://redis:6379/8
+
+# --- MinIO (Armazenamento S3) ---
+MINIO_CONSOLE_DOMAIN="${MINIO_CONSOLE_DOMAIN}"
+MINIO_S3_DOMAIN="${MINIO_S3_DOMAIN}"
+MINIO_ROOT_USER="${MINIO_ROOT_USER}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD}"
+MINIO_VOLUME=minio_data
+S3_ENABLED=false
+S3_ACCESS_KEY=
+S3_SECRET_KEY=
+S3_ENDPOINT="${MINIO_S3_DOMAIN}"
+
+# --- n8n (Automação de Fluxos de Trabalho) ---
+N8N_EDITOR_DOMAIN="${N8N_EDITOR_DOMAIN}"
+N8N_WEBHOOK_DOMAIN="${N8N_WEBHOOK_DOMAIN}"
+N8N_ENCRYPTION_KEY=$(openssl rand -hex 32)
+N8N_SMTP_USER=fluxerautoma@gmail.com
+N8N_SMTP_PASS=teste
+
+# --- Typebot (Construtor de Chatbot) ---
+TYPEBOT_EDITOR_DOMAIN="${TYPEBOT_EDITOR_DOMAIN}"
+TYPEBOT_VIEWER_DOMAIN="${TYPEBOT_VIEWER_DOMAIN}"
+TYPEBOT_ENCRYPTION_KEY=$(openssl rand -hex 32)
+
+# --- Evolution API ---
+EVOLUTION_DOMAIN="${EVOLUTION_DOMAIN}"
+EVOLUTION_API_KEY="${EVOLUTION_API_KEY}"
+EVOLUTION_VOLUME=evolution_instances
+EOF
+
+    echo -e "${VERDE}✔.env criado com sucesso!${RESET}"
+}
+
+# Exibe um resumo final com URLs de acesso e informações importantes.
+print_summary() {
+    echo -e "\n${AZUL}${NEGRITO}✅ CONFIGURAÇÃO CONCLUÍDA!${RESET}"
+    echo -e "${NEGRITO}Acesse seus serviços nos seguintes endereços:${RESET}"
+    echo -e "${VERDE}Painel Portainer:     https://${PORTAINER_DOMAIN}${RESET}"
+    echo -e "${VERDE}Painel n8n (editor):   https://${N8N_EDITOR_DOMAIN}${RESET}"
+    echo -e "${VERDE}Webhook n8n:           https://${N8N_WEBHOOK_DOMAIN}${RESET}"
+    echo -e "${VERDE}Builder Typebot:       https://${TYPEBOT_EDITOR_DOMAIN}${RESET}"
+    echo -e "${VERDE}Viewer Typebot:        https://${TYPEBOT_VIEWER_DOMAIN}${RESET}"
+    echo -e "${VERDE}MinIO Painel:          https://${MINIO_CONSOLE_DOMAIN}${RESET}"
+    echo -e "${VERDE}MinIO S3 Endpoint:     https://${MINIO_S3_DOMAIN}${RESET}"
+    echo -e "${VERDE}Evolution API:         https://${EVOLUTION_DOMAIN}${RESET}"
+    echo
+
+    echo -e "${AMARELO}${NEGRITO}⚠️ AVISO DE SEGURANÇA:${RESET}"
+    echo -e "${AMARELO}As senhas e chaves que você definiu ou que foram geradas ${NEGRITO}NÃO${AMARELO} serão exibidas aqui."
+    echo -e "${AMARELO}Certifique-se de tê-las armazenado em um local seguro (gerenciador de senhas).${RESET}"
+    echo -e "${NEGRITO}Usuário root do MinIO:   ${MINIO_ROOT_USER}${RESET}"
+    echo -e "${NEGRITO}Chave da Evolution API:  ${EVOLUTION_API_KEY}${RESET} ${AMARELO}(guarde esta chave!)${RESET}"
+    echo
+    echo -e "${AZUL}Para iniciar os serviços, execute o comando: ${NEGRITO}docker-compose up -d${RESET}"
+}
+
+# --- Função Principal de Execução ---
+main() {
+    display_banner
+    get_user_input
+    generate_env_file
+    print_summary
+}
+
+# Executa o script
 main

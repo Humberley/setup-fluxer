@@ -3,9 +3,9 @@
 #-------------------------------------------------------------------------------
 # Script: Instalador de Ambiente Fluxer
 # Descrição: Coleta as informações do usuário, prepara o ambiente Docker Swarm
-#            e inicia os serviços através da API do Portainer para gestão centralizada.
+#            e inicia os serviços através da API do Portainer de forma 100% automática.
 # Autor: Humberley / [Seu Nome]
-# Versão: 4.8 (Ignora verificação de certificado)
+# Versão: 5.1 (API do Portainer com Retentativa e Verificação)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -28,6 +28,7 @@ msg_warning() {
 }
 msg_error() {
     echo -e "${VERMELHO}❌ ERRO: $1${RESET}"
+    exit 1
 }
 
 # === FUNÇÃO PRINCIPAL ===
@@ -201,29 +202,38 @@ main() {
         sleep 5
         wait_time=$((wait_time + 5))
         if [ $wait_time -ge $max_wait ]; then
-            echo # new line
+            echo
             msg_error "O serviço do Portainer não iniciou corretamente após ${max_wait} segundos."
-            echo "A exibir os logs dos serviços 'traefik' e 'portainer' para diagnóstico..."
-            echo -e "\n${NEGRITO}------------------- LOGS DO TRAEFIK -------------------${RESET}"
-            docker service logs traefik_traefik --since 5m
-            echo -e "\n${NEGRITO}------------------- LOGS DO PORTAINER -------------------${RESET}"
-            docker service logs portainer_portainer --since 5m
             exit 1
         fi
     done
     
-    # Pequena pausa extra para garantir que a API interna do Portainer esteja pronta
     echo -e "\n${VERDE}Serviço do Portainer está a correr! A aguardar que a API fique disponível...${RESET}"
-    sleep 15
+    wait_time=0
+    max_wait=120 # 2 minutos para a API responder
+    until $(curl --output /dev/null --silent --fail "http://portainer:9000/api/health"); do
+        printf '.'
+        sleep 5
+        wait_time=$((wait_time + 5))
+        if [ $wait_time -ge $max_wait ]; then
+            msg_error "A API do Portainer não ficou disponível após ${max_wait} segundos."
+        fi
+    done
+    echo -e "\n${VERDE}API do Portainer está disponível!${RESET}"
 
     echo "A criar utilizador 'admin' do Portainer..."
-    # Usamos o IP interno do serviço para garantir a comunicação, ignorando problemas de DNS/SSL
-    curl -s -k -X POST "http://portainer:9000/api/users/admin/init" \
+    local http_code_init=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://portainer:9000/api/users/admin/init" \
         -H "Content-Type: application/json" \
-        --data "{\"Password\": \"${PORTAINER_PASSWORD}\"}" > /dev/null
+        --data "{\"Username\": \"admin\", \"Password\": \"${PORTAINER_PASSWORD}\"}")
 
+    if [[ "$http_code_init" -ne 204 ]]; then
+        msg_warning "Não foi possível inicializar o utilizador admin (Código HTTP: ${http_code_init}). Pode já existir. A continuar..."
+    else
+        msg_success "Utilizador admin do Portainer inicializado."
+    fi
+    
     echo "A autenticar na API do Portainer para obter token JWT..."
-    local jwt_response=$(curl -s -k -X POST "http://portainer:9000/api/auth" \
+    local jwt_response=$(curl -s -X POST "http://portainer:9000/api/auth" \
         -H "Content-Type: application/json" \
         --data "{\"username\": \"admin\", \"password\": \"${PORTAINER_PASSWORD}\"}")
     local PORTAINER_JWT=$(echo "$jwt_response" | jq -r .jwt)
@@ -234,7 +244,7 @@ main() {
     msg_success "Token JWT obtido com sucesso."
 
     echo "A gerar chave de API do Portainer..."
-    local apikey_response=$(curl -s -k -X POST "http://portainer:9000/api/users/admin/tokens" \
+    local apikey_response=$(curl -s -X POST "http://portainer:9000/api/users/admin/tokens" \
         -H "Authorization: Bearer ${PORTAINER_JWT}" \
         -H "Content-Type: application/json" \
         --data '{"description": "fluxer_installer_key"}')

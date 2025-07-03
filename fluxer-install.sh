@@ -5,7 +5,7 @@
 # Descrição: Implementa a lógica de instalação robusta do SetupOrion,
 #            incluindo preparação, deploy, verificação e configuração em etapas.
 # Autor: Humberley / [Seu Nome]
-# Versão: 10.5 (Corrigido para Traefik v3)
+# Versão: 10.5 (Corrige a configuração do Traefik para v3)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -132,6 +132,7 @@ wait_stack() {
     done
 }
 
+
 # === FUNÇÃO PRINCIPAL ===
 main() {
     clear
@@ -163,16 +164,8 @@ main() {
 
     # --- PREPARAÇÃO DO AMBIENTE SWARM ---
     msg_header "PREPARANDO O AMBIENTE SWARM"
-    echo "Garantindo a existência da rede Docker overlay '${REDE_DOCKER}'..."
-    docker network rm "$REDE_DOCKER" >/dev/null 2>&1
-    docker network create --driver=overlay --attachable "$REDE_DOCKER" || msg_fatal "Falha ao criar a rede overlay '${REDE_DOCKER}'."
-    msg_success "Rede '${REDE_DOCKER}' pronta."
-    
-    echo "Criando os volumes Docker..."
-    docker volume create "portainer_data" >/dev/null
-    docker volume create "volume_swarm_certificates" >/dev/null
-    docker volume create "volume_swarm_shared" >/dev/null
-    msg_success "Volumes prontos."
+    echo "Garantindo a existência da rede Docker overlay '${REDE_DOCKER}'..."; docker network rm "$REDE_DOCKER" >/dev/null 2>&1; docker network create --driver=overlay --attachable "$REDE_DOCKER" || msg_fatal "Falha ao criar a rede overlay '${REDE_DOCKER}'."; msg_success "Rede '${REDE_DOCKER}' pronta."
+    echo "Criando os volumes Docker..."; docker volume create "portainer_data" >/dev/null; docker volume create "volume_swarm_certificates" >/dev/null; docker volume create "volume_swarm_shared" >/dev/null; msg_success "Volumes prontos."
 
     # --- ETAPA 1: INSTALAR TRAEFIK E PORTAINER ---
     msg_header "[1/3] INSTALANDO TRAEFIK E PORTAINER"
@@ -186,17 +179,19 @@ services:
     image: traefik:v3.0
     command:
       - "--api.dashboard=true"
-      - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
-      - "--providers.swarm.exposedbydefault=false"
+      - "--providers.swarm=true"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=${REDE_DOCKER}"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
       - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
       - "--certificatesresolvers.letsencryptresolver.acme.email=${LE_EMAIL}"
-      - "--certificatesresolvers.letsencryptresolver.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencryptresolver.acme.storage=/etc/traefik/letsencrypt/acme.json"
       - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge=true"
       - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge.entrypoint=web"
-      - "--log.level=INFO"
+      - "--log.level=DEBUG"
       - "--log.filePath=/var/log/traefik/traefik.log"
       - "--accesslog=true"
       - "--accesslog.filepath=/var/log/traefik/access.log"
@@ -204,7 +199,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - "volume_swarm_certificates:/letsencrypt"
+      - "volume_swarm_certificates:/etc/traefik/letsencrypt"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "volume_swarm_shared:/var/log/traefik"
     networks:
@@ -213,15 +208,6 @@ services:
       placement:
         constraints:
           - node.role == manager
-      labels:
-        # Dashboard do Traefik (opcional - descomente se quiser acesso web)
-        # - "traefik.enable=true"
-        # - "traefik.http.routers.traefik.rule=Host(\`traefik.${DOMINIO_RAIZ}\`)"
-        # - "traefik.http.routers.traefik.entrypoints=websecure"
-        # - "traefik.http.routers.traefik.tls.certresolver=letsencryptresolver"
-        # - "traefik.http.routers.traefik.service=api@internal"
-        # - "traefik.http.services.traefik.loadbalancer.server.port=8080"
-        # - "traefik.docker.network=${REDE_DOCKER}"
 
 networks:
   ${REDE_DOCKER}:

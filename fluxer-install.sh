@@ -3,9 +3,9 @@
 #-------------------------------------------------------------------------------
 # Script: Instalador de Ambiente Fluxer
 # Descrição: Coleta as informações do usuário, prepara o ambiente Docker Swarm
-#            e inicia os serviços através da API do Portainer de forma 100% automática.
+#            e inicia os serviços através da API do Portainer para gestão centralizada.
 # Autor: Humberley / [Seu Nome]
-# Versão: 5.1 (API do Portainer com Retentativa e Verificação)
+# Versão: 5.2 (Instalação Híbrida com Intervenção do Utilizador)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -87,17 +87,7 @@ main() {
     while [[ -z "$LE_EMAIL" ]]; do
         read -p "📧 Email para o certificado SSL (Let's Encrypt): " LE_EMAIL < /dev/tty
     done
-
-    while true; do
-        read -s -p "🔑 Digite uma senha para o Portainer (mínimo 12 caracteres): " PORTAINER_PASSWORD < /dev/tty; echo
-        read -s -p "🔑 Confirme a senha do Portainer: " PORTAINER_PASSWORD_CONFIRM < /dev/tty; echo
-        if [[ "$PORTAINER_PASSWORD" == "$PORTAINER_PASSWORD_CONFIRM" ]] && [[ ${#PORTAINER_PASSWORD} -ge 12 ]]; then
-            break
-        else
-            msg_warning "As senhas não coincidem ou têm menos de 12 caracteres. Tente novamente."
-        fi
-    done
-
+    
     while [[ -z "$MINIO_ROOT_USER" ]]; do
         read -p "👤 Utilizador root para o MinIO: " MINIO_ROOT_USER < /dev/tty
     done
@@ -115,7 +105,7 @@ main() {
     msg_header "GERANDO CONFIGURAÇÕES"
     echo "Gerando subdomínios e chaves de segurança..."
 
-    export DOMINIO_RAIZ LE_EMAIL PORTAINER_PASSWORD MINIO_ROOT_USER MINIO_ROOT_PASSWORD
+    export DOMINIO_RAIZ LE_EMAIL MINIO_ROOT_USER MINIO_ROOT_PASSWORD
 
     export PORTAINER_DOMAIN="portainer.${DOMINIO_RAIZ}"
     export N8N_EDITOR_DOMAIN="n8n.${DOMINIO_RAIZ}"
@@ -190,70 +180,38 @@ main() {
         fi
     done
 
-    # ETAPA 2: Configurar Portainer e gerar chave de API automaticamente
-    msg_header "CONFIGURANDO PORTAINER E GERANDO CHAVE DE API"
-    echo "A aguardar que o serviço do Portainer esteja estável..."
+    # ETAPA 2: Configuração manual do Portainer e obtenção da chave de API
+    msg_header "AÇÃO NECESSÁRIA: CONFIGURAR PORTAINER E OBTER CHAVE DE API"
+    echo "A aguardar que o Portainer fique online em https://${PORTAINER_DOMAIN}..."
+    echo "Isto pode demorar alguns minutos enquanto o certificado SSL é gerado..."
 
     local wait_time=0
     local max_wait=180 # 3 minutos de tempo de espera
 
-    until [[ $(docker service ls --filter name=portainer_portainer --format "{{.Replicas}}") == "1/1" ]]; do
+    until $(curl --output /dev/null --silent --head --fail -k "https://${PORTAINER_DOMAIN}/api/health"); do
         printf '.'
         sleep 5
         wait_time=$((wait_time + 5))
         if [ $wait_time -ge $max_wait ]; then
             echo
-            msg_error "O serviço do Portainer não iniciou corretamente após ${max_wait} segundos."
+            msg_error "O Portainer não ficou online após ${max_wait} segundos."
             exit 1
         fi
     done
-    
-    echo -e "\n${VERDE}Serviço do Portainer está a correr! A aguardar que a API fique disponível...${RESET}"
-    wait_time=0
-    max_wait=120 # 2 minutos para a API responder
-    until $(curl --output /dev/null --silent --fail "http://portainer:9000/api/health"); do
-        printf '.'
-        sleep 5
-        wait_time=$((wait_time + 5))
-        if [ $wait_time -ge $max_wait ]; then
-            msg_error "A API do Portainer não ficou disponível após ${max_wait} segundos."
-        fi
+    echo -e "\n${VERDE}Portainer está online!${RESET}"
+    echo
+    echo -e "${AMARELO}Por favor, siga estes passos:${RESET}"
+    echo -e "1. Abra o seu navegador e aceda a: ${NEGRITO}https://${PORTAINER_DOMAIN}${RESET}"
+    echo -e "2. Crie a sua conta de administrador. ${NEGRITO}Use 'admin' como nome de utilizador.${RESET}"
+    echo -e "3. Após o login, no menu à esquerda, vá a ${NEGRITO}My account${RESET}."
+    echo -e "4. Na secção ${NEGRITO}API Keys${RESET}, clique em ${NEGRITO}+ Add API key${RESET}."
+    echo -e "5. Dê uma descrição (ex: 'fluxer_installer') e clique em ${NEGRITO}Add API key${RESET}."
+    echo -e "6. ${NEGRITO}Copie a chave gerada${RESET} e cole-a abaixo."
+    echo
+
+    while [[ -z "$PORTAINER_API_KEY" ]]; do
+        read -s -p "🔑 Cole a sua chave de API do Portainer aqui: " PORTAINER_API_KEY < /dev/tty; echo
     done
-    echo -e "\n${VERDE}API do Portainer está disponível!${RESET}"
-
-    echo "A criar utilizador 'admin' do Portainer..."
-    local http_code_init=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://portainer:9000/api/users/admin/init" \
-        -H "Content-Type: application/json" \
-        --data "{\"Username\": \"admin\", \"Password\": \"${PORTAINER_PASSWORD}\"}")
-
-    if [[ "$http_code_init" -ne 204 ]]; then
-        msg_warning "Não foi possível inicializar o utilizador admin (Código HTTP: ${http_code_init}). Pode já existir. A continuar..."
-    else
-        msg_success "Utilizador admin do Portainer inicializado."
-    fi
-    
-    echo "A autenticar na API do Portainer para obter token JWT..."
-    local jwt_response=$(curl -s -X POST "http://portainer:9000/api/auth" \
-        -H "Content-Type: application/json" \
-        --data "{\"username\": \"admin\", \"password\": \"${PORTAINER_PASSWORD}\"}")
-    local PORTAINER_JWT=$(echo "$jwt_response" | jq -r .jwt)
-
-    if [[ -z "$PORTAINER_JWT" || "$PORTAINER_JWT" == "null" ]]; then
-        msg_error "Falha ao obter o token JWT do Portainer. Verifique a senha e o estado do serviço."
-    fi
-    msg_success "Token JWT obtido com sucesso."
-
-    echo "A gerar chave de API do Portainer..."
-    local apikey_response=$(curl -s -X POST "http://portainer:9000/api/users/admin/tokens" \
-        -H "Authorization: Bearer ${PORTAINER_JWT}" \
-        -H "Content-Type: application/json" \
-        --data '{"description": "fluxer_installer_key"}')
-    local PORTAINER_API_KEY=$(echo "$apikey_response" | jq -r .raw)
-
-    if [[ -z "$PORTAINER_API_KEY" || "$PORTAINER_API_KEY" == "null" ]]; then
-        msg_error "Falha ao gerar a chave de API do Portainer."
-    fi
-    msg_success "Chave de API do Portainer gerada e pronta para uso!"
 
     # ETAPA 3: Implantar o resto dos stacks via API do Portainer
     msg_header "IMPLANTANDO STACKS DE APLICAÇÃO VIA API DO PORTAINER"
@@ -282,7 +240,7 @@ main() {
             -H "X-API-Key: ${PORTAINER_API_KEY}" \
             -H "Content-Type: application/json" \
             --data-binary @- \
-            "http://portainer:9000/api/stacks?type=1&method=string&endpointId=${ENDPOINT_ID}" <<< "$JSON_PAYLOAD")
+            "https://${PORTAINER_DOMAIN}/api/stacks?type=1&method=string&endpointId=${ENDPOINT_ID}" <<< "$JSON_PAYLOAD")
 
         # Verifica se a resposta contém um erro
         if echo "$response" | jq -e '.message' > /dev/null; then
@@ -312,7 +270,6 @@ main() {
     if [[ "$SHOW_CREDS" =~ ^[Ss]$ ]]; then
         echo
         msg_header "CREDENCIAS GERADAS (guarde em local seguro)"
-        echo -e "${NEGRITO}Senha do Portainer:      ${PORTAINER_PASSWORD}${RESET}"
         echo -e "${NEGRITO}Utilizador root do MinIO:   ${MINIO_ROOT_USER}${RESET}"
         echo -e "${NEGRITO}Senha root do MinIO:     ${MINIO_ROOT_PASSWORD}${RESET}"
         echo -e "${NEGRITO}Chave da Evolution API:  ${EVOLUTION_API_KEY}${RESET}"

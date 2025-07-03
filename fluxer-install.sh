@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #-------------------------------------------------------------------------------
-# Script: Instalador de Ambiente Fluxer (Corrigido)
+# Script: Instalador de Ambiente Fluxer (Corrigido v2)
 # Descrição: Implementa a lógica de instalação do SetupOrion,
 #            com drop/criação de bancos de dados para garantir ambiente limpo.
 # Autor: Humberley / Gemini
@@ -133,6 +133,7 @@ wait_stack() {
     local stack_name=$1
     local service_name=$2
     echo -e "\n${NEGRITO}Aguardando o serviço ${service_name} do stack ${stack_name} ficar online...${RESET}"
+    local retries=30 # Adiciona um timeout para wait_stack
     while true; do
         if docker service ls --filter "name=${stack_name}_${service_name}" | grep -q "1/1"; then
             msg_success "Serviço ${stack_name}_${service_name} está online."
@@ -140,6 +141,10 @@ wait_stack() {
         fi
         printf "."
         sleep 10
+        ((retries--))
+        if [ $retries -le 0 ]; then
+            msg_fatal "Serviço ${stack_name}_${service_name} não ficou online a tempo após 300 segundos."
+        fi
     done
 }
 
@@ -427,6 +432,9 @@ services:
       - N8N_REINSTALL_MISSING_PACKAGES=true
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
       - N8N_NODE_PATH=/home/node/.n8n/nodes
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true # Adicionado para corrigir aviso de permissões
+      - N8N_RUNNERS_ENABLED=true # Adicionado para corrigir depreciação
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true # Adicionado para corrigir depreciação
 
       - N8N_SMTP_SENDER=${SMTP_USER}
       - N8N_SMTP_USER=${SMTP_USER}
@@ -487,6 +495,9 @@ services:
       - N8N_REINSTALL_MISSING_PACKAGES=true
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
       - N8N_NODE_PATH=/home/node/.n8n/nodes
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true # Adicionado para corrigir aviso de permissões
+      - N8N_RUNNERS_ENABLED=true # Adicionado para corrigir depreciação
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true # Adicionado para corrigir depreciação
 
       - N8N_SMTP_SENDER=${SMTP_USER}
       - N8N_SMTP_USER=${SMTP_USER}
@@ -547,6 +558,9 @@ services:
       - N8N_REINSTALL_MISSING_PACKAGES=true
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
       - N8N_NODE_PATH=/home/node/.n8n/nodes
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true # Adicionado para corrigir aviso de permissões
+      - N8N_RUNNERS_ENABLED=true # Adicionado para corrigir depreciação
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true # Adicionado para corrigir depreciação
 
       - N8N_SMTP_SENDER=${SMTP_USER}
       - N8N_SMTP_USER=${SMTP_USER}
@@ -922,15 +936,15 @@ create_databases() {
     msg_success "Postgres está pronto!"
 
     echo "Limpando e recriando banco de dados 'n8n_queue'..."
-    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS n8n_queue;"
+    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS n8n_queue WITH (FORCE);" # Adicionado FORCE para garantir o drop
     docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE n8n_queue;"
     
     echo "Limpando e recriando banco de dados 'typebot'..."
-    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS typebot;"
+    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS typebot WITH (FORCE);" # Adicionado FORCE
     docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE typebot;"
 
     echo "Limpando e recriando banco de dados 'evolution'..."
-    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS evolution;"
+    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS evolution WITH (FORCE);" # Adicionado FORCE
     docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE evolution;"
     
     msg_success "Bancos de dados redefinidos com sucesso."
@@ -942,12 +956,12 @@ main() {
     clear
     # --- BANNER ---
     echo -e "${AZUL}${NEGRITO}"
-    echo "███████╗██╗     ██╗   ██╗██╗  ██╗███████╗██████╗      ███████╗███████╗████████╗██╗  ██╗██████╗ "
-    echo "██╔════╝██║     ██║   ██║██║ ██╔╝██╔════╝██╔══██╗     ██╔════╝██╔════╝╚══██╔══╝██║  ██║██╔══██╗"
-    echo "█████╗  ██║     ██║   ██║█████╔╝ █████╗  ██████╔╝     ███████╗█████╗     ██║   ██║  ██║██████╔╝"
-    echo "██╔══╝  ██║     ██║   ██║██╔═██╗ ██╔══╝  ██╔══╝██     ╚════██║██╔══╝     ██║   ██║  ██║██╔═══╝ "
-    echo "██║     ███████╗ ╚██████╔╝██║  ██╗███████╗██║   ██     ███████║███████╗   ██║   ╚██████╔╝██║     "
-    echo "╚═╝     ╚══════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝    ██     ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝     "
+    echo "███████╗██╗      ██╗    ██╗██╗  ██╗███████╗██████╗       ███████╗███████╗████████╗██╗  ██╗██████╗ "
+    echo "██╔════╝██║      ██║    ██║██║ ██╔╝██╔════╝██╔══██╗      ██╔════╝██╔════╝╚══██╔══╝██║  ██║██╔══██╗"
+    echo "█████╗  ██║      ██║    ██║█████╔╝ █████╗  ██████╔╝      ███████╗█████╗      ██║   ██║  ██║██████╔╝"
+    echo "██╔══╝  ██║      ██║    ██║██╔═██╗ ██╔══╝  ██╔══╝██      ╚════██║██╔══╝      ██║   ██║  ██║██╔═══╝ "
+    echo "██║     ███████╗ ╚██████╔╝██║  ██╗███████╗██║    ██      ███████║███████╗    ██║   ╚██████╔╝██║     "
+    echo "╚═╝     ╚══════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝    ██      ╚══════╝╚══════╝    ╚═╝    ╚═════╝ ╚═╝     "
     echo -e "${RESET}"
     echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS (v13.5)${RESET}"
     echo -e "${AZUL}Criado por Humberley Cezilio${RESET}"
@@ -962,9 +976,9 @@ main() {
     echo ""
     echo -e "Acesse sua conta na ${NEGRITO}Cloudflare${RESET} e crie a seguinte entrada de DNS:"
     echo -e "  - ${NEGRITO}Tipo:${RESET}    A"
-    echo -e "  - ${NEGRITO}Nome:${RESET}     * (apenas o asterisco)"
+    echo -e "  - ${NEGRITO}Nome:${RESET}      * (apenas o asterisco)"
     echo -e "  - ${NEGRITO}Endereço IPv4:${RESET} $(curl -s ifconfig.me) (o IP desta VPS)"
-    echo -e "  - ${NEGRITO}Proxy:${RESET}    ${VERMELHO}Desativado${RESET} (DNS Only - a nuvem deve ser cinza)"
+    echo -e "  - ${NEGRITO}Proxy:${RESET}     ${VERMELHO}Desativado${RESET} (DNS Only - a nuvem deve ser cinza)"
     echo ""
     read -p "Após configurar o DNS na Cloudflare, pressione [Enter] para continuar..." < /dev/tty
 
@@ -1053,7 +1067,7 @@ main() {
     done
     if [ "$account_created" = false ]; then msg_fatal "Não foi possível criar a conta de administrador no Portainer."; fi
 
-    # --- ETAPA 3: OBTER CHAVE DE API ---
+    # --- ETAPA 3: OBTENDO CHAVE DE API ---
     msg_header "[3/5] OBTENDO CHAVE DE API DO PORTAINER"
     echo "A autenticar para obter token JWT..."; local jwt_response; jwt_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/auth" -H "Content-Type: application/json" --data "{\"username\": \"admin\", \"password\": \"${PORTAINER_PASSWORD}\"}"); local PORTAINER_JWT=$(echo "$jwt_response" | jq -r .jwt); if [[ -z "$PORTAINER_JWT" || "$PORTAINER_JWT" == "null" ]]; then msg_fatal "Falha ao obter o token JWT."; fi; msg_success "Token JWT obtido."
     
@@ -1074,6 +1088,8 @@ main() {
     wait_stack "minio" "minio"
 
     create_databases
+    echo "Aguardando 15 segundos para o PostgreSQL processar a criação dos bancos de dados..."
+    sleep 15 # Adicionado um atraso para dar tempo ao PostgreSQL de se estabilizar
 
     # --- ETAPA 5: IMPLANTAR STACKS DE APLICAÇÃO ---
     msg_header "[5/5] IMPLANTANDO STACKS DE APLICAÇÃO"
@@ -1086,20 +1102,20 @@ main() {
     # --- RESUMO FINAL ---
     msg_header "🎉 INSTALAÇÃO CONCLUÍDA 🎉"
     echo "Aguarde alguns minutos para que todos os serviços sejam iniciados."; echo "Pode verificar o estado no seu painel Portainer ou com o comando: ${NEGRITO}docker service ls${RESET}"; echo; echo "Abaixo estão os seus links de acesso:"; echo
-    echo -e "${NEGRITO}Painel Portainer:     https://${PORTAINER_DOMAIN}${RESET}"
-    echo -e "${NEGRITO}Painel n8n (editor):  https://${N8N_EDITOR_DOMAIN}${RESET}"
-    echo -e "${NEGRITO}Builder Typebot:      https://${TYPEBOT_EDITOR_DOMAIN}${RESET}"
-    echo -e "${NEGRITO}MinIO Painel:         https://${MINIO_CONSOLE_DOMAIN}${RESET}"
-    echo -e "${NEGRITO}Evolution API:        https://${EVOLUTION_DOMAIN}${RESET}"
+    echo -e "${NEGRITO}Painel Portainer:      https://${PORTAINER_DOMAIN}${RESET}"
+    echo -e "${NEGRITO}Painel n8n (editor):   https://${N8N_EDITOR_DOMAIN}${RESET}"
+    echo -e "${NEGRITO}Builder Typebot:       https://${TYPEBOT_EDITOR_DOMAIN}${RESET}"
+    echo -e "${NEGRITO}MinIO Painel:          https://${MINIO_CONSOLE_DOMAIN}${RESET}"
+    echo -e "${NEGRITO}Evolution API:         https://${EVOLUTION_DOMAIN}${RESET}"
     echo
     read -p "Deseja exibir as senhas e chaves geradas? (s/N): " SHOW_CREDS < /dev/tty
     if [[ "$SHOW_CREDS" =~ ^[Ss]$ ]]; then
         echo; msg_header "CREDENCIAS GERADAS (guarde em local seguro)"
-        echo -e "${NEGRITO}Senha do Portainer:     ${PORTAINER_PASSWORD}${RESET}"
+        echo -e "${NEGRITO}Senha do Portainer:      ${PORTAINER_PASSWORD}${RESET}"
         echo -e "${NEGRITO}Utilizador root do MinIO: ${MINIO_ROOT_USER}${RESET}"
-        echo -e "${NEGRITO}Senha root do MinIO:    ${MINIO_ROOT_PASSWORD}${RESET}"
+        echo -e "${NEGRITO}Senha root do MinIO:     ${MINIO_ROOT_PASSWORD}${RESET}"
         echo -e "${NEGRITO}Chave da Evolution API: ${EVOLUTION_API_KEY}${RESET}"
-        echo -e "${NEGRITO}Senha do Postgres:      ${POSTGRES_PASSWORD}${RESET}"
+        echo -e "${NEGRITO}Senha do Postgres:       ${POSTGRES_PASSWORD}${RESET}"
     fi
     echo; msg_success "Tudo pronto! Aproveite o seu novo ambiente de automação."
 }

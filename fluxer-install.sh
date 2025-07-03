@@ -5,7 +5,7 @@
 # Descrição: Implementa a lógica de instalação robusta do SetupOrion,
 #            incluindo preparação, deploy, verificação e configuração em etapas.
 # Autor: Humberley / [Seu Nome]
-# Versão: 11.6 (Corrige payload de deploy da API com SwarmID)
+# Versão: 11.7 (Corrige método de deploy da API e adiciona logs)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -164,33 +164,34 @@ deploy_stack_via_api() {
     echo "Processando e implantando o stack: ${NEGRITO}${stack_name}${RESET}..."
     
     envsubst < "$template_file" > "$processed_file"
-    local compose_content
-    compose_content=$(cat "$processed_file")
 
-    local json_payload
-    json_payload=$(jq -n \
-        --arg name "$stack_name" \
-        --arg content "$compose_content" \
-        --arg swarmID "$swarm_id" \
-        '{Name: $name, StackFileContent: $content, SwarmID: $swarmID}')
+    msg_warning "--- DEBUG: Enviando o seguinte pedido para a API ---"
+    echo "URL: https://${portainer_domain}/api/stacks/create/swarm/file?endpointId=${endpoint_id}"
+    echo "Stack Name: ${stack_name}"
+    echo "Swarm ID: ${swarm_id}"
+    echo "---------------------------------------------"
 
     local response
-    response=$(curl -s -k -w "%{http_code}" -X POST \
+    response=$(curl -s -k -w "\n%{http_code}" -X POST \
         -H "X-API-Key: ${api_key}" \
-        -H "Content-Type: application/json" \
-        --data-binary @- \
-        "https://${portainer_domain}/api/stacks?type=1&method=string&endpointId=${endpoint_id}")
+        -F "Name=${stack_name}" \
+        -F "SwarmID=${swarm_id}" \
+        -F "file=@${processed_file}" \
+        "https://${portainer_domain}/api/stacks/create/swarm/file?endpointId=${endpoint_id}")
     
-    local http_code=${response: -3}
-    local response_body=${response::-3}
+    local http_code
+    http_code=$(tail -n1 <<< "$response")
+    local response_body
+    response_body=$(sed '$ d' <<< "$response")
 
     if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
         msg_success "Stack '${stack_name}' implantado com sucesso via API do Portainer!"
         return 0
     else
         local error_message
-        error_message=$(echo "$response_body" | jq -r '.message, .details' | tr '\n' ' ')
+        error_message=$(echo "$response_body" | jq -r '.message, .details' 2>/dev/null | tr '\n' ' ')
         msg_error "Falha ao implantar '${stack_name}' via API (Código: ${http_code}): ${error_message}"
+        echo "Resposta completa da API: ${response_body}"
         return 1
     fi
 }

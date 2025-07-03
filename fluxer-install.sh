@@ -3,9 +3,9 @@
 #-------------------------------------------------------------------------------
 # Script: Instalador de Ambiente Fluxer
 # Descrição: Coleta as informações do usuário, gera o .env e inicia cada
-#            serviço como uma stack individual no Docker Swarm.
+#            serviço como uma stack individual no Docker Swarm, em ordem.
 # Autor: Humberley / [Seu Nome]
-# Versão: 3.4 (Corrige erro de sintaxe YML de forma robusta)
+# Versão: 3.6 (Ordem de Implantação Corrigida)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -145,40 +145,31 @@ main() {
     docker volume create "volume_swarm_shared" >/dev/null
     msg_success "Volumes prontos."
 
-    # --- ADAPTANDO FICHEIROS DE CONFIGURAÇÃO (ETAPA CORRIGIDA) ---
-    msg_header "ADAPTANDO FICHEIROS DE CONFIGURAÇÃO"
-    
-    local STACKS_DIR="stacks"
-    for file in $(find "$STACKS_DIR" -type f -name "*.template.yml"); do
-        # O Docker Swarm não precisa das definições de volumes/redes externas
-        # nos ficheiros de compose se eles já existem.
-        # Esta etapa remove essas secções para evitar erros de sintaxe.
-        echo "Adaptando o ficheiro: ${file}..."
-        tmp_file=$(mktemp)
-        # Usa awk para imprimir apenas até encontrar uma chave de topo "volumes:" ou "networks:"
-        awk '
-            # Se encontrarmos uma chave de topo "volumes:" ou "networks:", paramos de processar.
-            /^(volumes|networks):/ { exit }
-            # Caso contrário, imprimimos a linha.
-            { print }
-        ' "$file" > "$tmp_file"
-        mv "$tmp_file" "$file"
-    done
-    msg_success "Ficheiros de configuração adaptados."
-
-
-    # --- INICIANDO OS STACKS INDIVIDUALMENTE ---
+    # --- INICIANDO OS STACKS INDIVIDUALMENTE (EM ORDEM CORRETA) ---
     msg_header "INICIANDO OS STACKS DE SERVIÇOS"
     
-    if [ ! -d "$STACKS_DIR" ]; then
-        msg_error "O diretório '${STACKS_DIR}' contendo os templates não foi encontrado."
-    fi
+    local STACKS_DIR="stacks"
+    
+    # Define a ordem correta de implantação para garantir que as dependências sejam satisfeitas
+    local DEPLOY_ORDER=(
+        "traefik"
+        "redis"
+        "postgres"
+        "portainer"
+        "minio"
+        "n8n"
+        "typebot"
+        "evolution"
+    )
 
-    # Itera sobre cada ficheiro .template.yml e cria uma stack para cada um
-    for file in $(find "$STACKS_DIR" -type f -name "*.template.yml" | sort); do
-        # Extrai o nome do ficheiro para usar como nome da stack (ex: "traefik")
-        stack_name=$(basename "$file" .template.yml)
+    for stack_name in "${DEPLOY_ORDER[@]}"; do
+        local file="${STACKS_DIR}/${stack_name}/${stack_name}.template.yml"
         
+        if [ ! -f "$file" ]; then
+            msg_warning "Ficheiro de template para o stack '${stack_name}' não encontrado em '${file}'. A saltar."
+            continue
+        fi
+
         echo "-----------------------------------------------------"
         echo "Implantando o stack: ${NEGRITO}${stack_name}${RESET}..."
         

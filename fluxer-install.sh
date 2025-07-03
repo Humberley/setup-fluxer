@@ -5,7 +5,7 @@
 # Descrição: Coleta as informações do usuário, prepara o ambiente Docker Swarm
 #            e inicia os serviços através da API do Portainer para gestão centralizada.
 # Autor: Humberley / [Seu Nome]
-# Versão: 4.6 (Solução Definitiva com Pré-processamento Total)
+# Versão: 4.7 (Adiciona Diagnóstico Automático)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -28,7 +28,6 @@ msg_warning() {
 }
 msg_error() {
     echo -e "${VERMELHO}❌ ERRO: $1${RESET}"
-    exit 1
 }
 
 # === FUNÇÃO PRINCIPAL ===
@@ -144,9 +143,7 @@ main() {
     msg_header "PREPARANDO O AMBIENTE SWARM"
     
     echo "Garantindo a existência da rede Docker overlay '${REDE_DOCKER}'..."
-    # Remove a rede se ela existir, para garantir que podemos criá-la com o tipo correto.
     docker network rm "$REDE_DOCKER" >/dev/null 2>&1
-    # Cria a rede com o driver overlay, essencial para o Swarm.
     if ! docker network create --driver=overlay --attachable "$REDE_DOCKER"; then
         msg_error "Falha ao criar a rede overlay '${REDE_DOCKER}'."
     fi
@@ -183,7 +180,6 @@ main() {
         echo "-----------------------------------------------------"
         echo "Processando e implantando o stack base: ${NEGRITO}${stack_name}${RESET}..."
         
-        # Substitui as variáveis no ficheiro de template antes de o implantar
         envsubst < "$template_file" > "$processed_file"
 
         if docker stack deploy --compose-file "$processed_file" "$stack_name"; then
@@ -196,9 +192,29 @@ main() {
     # ETAPA 2: Configurar Portainer e gerar chave de API automaticamente
     msg_header "CONFIGURANDO PORTAINER E GERANDO CHAVE DE API"
     echo "A aguardar que o Portainer fique online em https://${PORTAINER_DOMAIN}..."
+    echo "Isto pode demorar alguns minutos enquanto o certificado SSL é gerado..."
+
+    local wait_time=0
+    local max_wait=180 # 3 minutos de tempo de espera
+
     until $(curl --output /dev/null --silent --head --fail -k "https://${PORTAINER_DOMAIN}/api/health"); do
         printf '.'
         sleep 5
+        wait_time=$((wait_time + 5))
+        if [ $wait_time -ge $max_wait ]; then
+            echo # new line
+            msg_error "O Portainer não ficou online após ${max_wait} segundos."
+            echo "A exibir os logs dos serviços 'traefik' e 'portainer' para diagnóstico..."
+            echo -e "\n${NEGRITO}------------------- LOGS DO TRAEFIK -------------------${RESET}"
+            docker service logs traefik_traefik
+            echo -e "\n${NEGRITO}------------------- LOGS DO PORTAINER -------------------${RESET}"
+            docker service logs portainer_portainer
+            echo -e "\n${AMARELO}------------------- POSSÍVEIS CAUSAS -------------------${RESET}"
+            echo "1. O registo DNS Wildcard (*) não está a apontar corretamente para o IP desta VPS."
+            echo "2. A Cloudflare está em modo Proxy (nuvem laranja). Deve estar em modo 'DNS Only' (nuvem cinza)."
+            echo "3. O Let's Encrypt atingiu o limite de pedidos para o seu domínio. Tente novamente mais tarde."
+            exit 1
+        fi
     done
     echo -e "\n${VERDE}Portainer está online!${RESET}"
 

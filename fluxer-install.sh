@@ -347,7 +347,7 @@ version: "3.7"
 services:
 
   minio:
-    image: quay.io/minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2025-02-03T21-03-04Z-cpuv1
     command: server /data --console-address ":9001"
 
     volumes:

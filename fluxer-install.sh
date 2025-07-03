@@ -5,7 +5,7 @@
 # Descrição: Coleta as informações do usuário, prepara o ambiente Docker Swarm
 #            e inicia os serviços através da API do Portainer para gestão centralizada.
 # Autor: Humberley / [Seu Nome]
-# Versão: 4.7 (Adiciona Diagnóstico Automático)
+# Versão: 4.8 (Ignora verificação de certificado)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -191,40 +191,39 @@ main() {
 
     # ETAPA 2: Configurar Portainer e gerar chave de API automaticamente
     msg_header "CONFIGURANDO PORTAINER E GERANDO CHAVE DE API"
-    echo "A aguardar que o Portainer fique online em https://${PORTAINER_DOMAIN}..."
-    echo "Isto pode demorar alguns minutos enquanto o certificado SSL é gerado..."
+    echo "A aguardar que o serviço do Portainer esteja estável..."
 
     local wait_time=0
     local max_wait=180 # 3 minutos de tempo de espera
 
-    until $(curl --output /dev/null --silent --head --fail -k "https://${PORTAINER_DOMAIN}/api/health"); do
+    until [[ $(docker service ls --filter name=portainer_portainer --format "{{.Replicas}}") == "1/1" ]]; do
         printf '.'
         sleep 5
         wait_time=$((wait_time + 5))
         if [ $wait_time -ge $max_wait ]; then
             echo # new line
-            msg_error "O Portainer não ficou online após ${max_wait} segundos."
+            msg_error "O serviço do Portainer não iniciou corretamente após ${max_wait} segundos."
             echo "A exibir os logs dos serviços 'traefik' e 'portainer' para diagnóstico..."
             echo -e "\n${NEGRITO}------------------- LOGS DO TRAEFIK -------------------${RESET}"
-            docker service logs traefik_traefik
+            docker service logs traefik_traefik --since 5m
             echo -e "\n${NEGRITO}------------------- LOGS DO PORTAINER -------------------${RESET}"
-            docker service logs portainer_portainer
-            echo -e "\n${AMARELO}------------------- POSSÍVEIS CAUSAS -------------------${RESET}"
-            echo "1. O registo DNS Wildcard (*) não está a apontar corretamente para o IP desta VPS."
-            echo "2. A Cloudflare está em modo Proxy (nuvem laranja). Deve estar em modo 'DNS Only' (nuvem cinza)."
-            echo "3. O Let's Encrypt atingiu o limite de pedidos para o seu domínio. Tente novamente mais tarde."
+            docker service logs portainer_portainer --since 5m
             exit 1
         fi
     done
-    echo -e "\n${VERDE}Portainer está online!${RESET}"
+    
+    # Pequena pausa extra para garantir que a API interna do Portainer esteja pronta
+    echo -e "\n${VERDE}Serviço do Portainer está a correr! A aguardar que a API fique disponível...${RESET}"
+    sleep 15
 
     echo "A criar utilizador 'admin' do Portainer..."
-    curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/users/admin/init" \
+    # Usamos o IP interno do serviço para garantir a comunicação, ignorando problemas de DNS/SSL
+    curl -s -k -X POST "http://portainer:9000/api/users/admin/init" \
         -H "Content-Type: application/json" \
         --data "{\"Password\": \"${PORTAINER_PASSWORD}\"}" > /dev/null
 
     echo "A autenticar na API do Portainer para obter token JWT..."
-    local jwt_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/auth" \
+    local jwt_response=$(curl -s -k -X POST "http://portainer:9000/api/auth" \
         -H "Content-Type: application/json" \
         --data "{\"username\": \"admin\", \"password\": \"${PORTAINER_PASSWORD}\"}")
     local PORTAINER_JWT=$(echo "$jwt_response" | jq -r .jwt)
@@ -235,7 +234,7 @@ main() {
     msg_success "Token JWT obtido com sucesso."
 
     echo "A gerar chave de API do Portainer..."
-    local apikey_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/users/admin/tokens" \
+    local apikey_response=$(curl -s -k -X POST "http://portainer:9000/api/users/admin/tokens" \
         -H "Authorization: Bearer ${PORTAINER_JWT}" \
         -H "Content-Type: application/json" \
         --data '{"description": "fluxer_installer_key"}')
@@ -273,7 +272,7 @@ main() {
             -H "X-API-Key: ${PORTAINER_API_KEY}" \
             -H "Content-Type: application/json" \
             --data-binary @- \
-            "https://${PORTAINER_DOMAIN}/api/stacks?type=1&method=string&endpointId=${ENDPOINT_ID}" <<< "$JSON_PAYLOAD")
+            "http://portainer:9000/api/stacks?type=1&method=string&endpointId=${ENDPOINT_ID}" <<< "$JSON_PAYLOAD")
 
         # Verifica se a resposta contém um erro
         if echo "$response" | jq -e '.message' > /dev/null; then

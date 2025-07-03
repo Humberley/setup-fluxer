@@ -5,7 +5,7 @@
 # Descrição: Coleta as informações do usuário, gera o .env e inicia cada
 #            serviço como uma stack individual no Docker Swarm, em ordem.
 # Autor: Humberley / [Seu Nome]
-# Versão: 3.6 (Ordem de Implantação Corrigida)
+# Versão: 3.7 (Pré-processa YMLs para robustez)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -44,6 +44,14 @@ main() {
     echo "╚═╝     ╚══════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝    ██     ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝     "
     echo -e "${RESET}"
     echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS${RESET}"
+
+    # --- VERIFICAÇÃO DE DEPENDÊNCIAS ---
+    msg_header "VERIFICANDO DEPENDÊNCIAS"
+    if ! command -v envsubst &> /dev/null; then
+        msg_warning "Comando 'envsubst' não encontrado. A instalar 'gettext-base'..."
+        apt-get update -qq && apt-get install -y gettext-base -qq || msg_error "Falha ao instalar 'gettext-base'."
+    fi
+    msg_success "Dependências prontas."
 
     # --- VERIFICAÇÃO DO DOCKER SWARM ---
     msg_header "VERIFICANDO AMBIENTE DOCKER SWARM"
@@ -149,7 +157,9 @@ main() {
     msg_header "INICIANDO OS STACKS DE SERVIÇOS"
     
     local STACKS_DIR="stacks"
-    
+    local PROCESSED_DIR="processed_stacks"
+    mkdir -p "$PROCESSED_DIR"
+
     # Define a ordem correta de implantação para garantir que as dependências sejam satisfeitas
     local DEPLOY_ORDER=(
         "traefik"
@@ -163,23 +173,30 @@ main() {
     )
 
     for stack_name in "${DEPLOY_ORDER[@]}"; do
-        local file="${STACKS_DIR}/${stack_name}/${stack_name}.template.yml"
+        local template_file="${STACKS_DIR}/${stack_name}/${stack_name}.template.yml"
+        local processed_file="${PROCESSED_DIR}/${stack_name}.yml"
         
-        if [ ! -f "$file" ]; then
-            msg_warning "Ficheiro de template para o stack '${stack_name}' não encontrado em '${file}'. A saltar."
+        if [ ! -f "$template_file" ]; then
+            msg_warning "Ficheiro de template para o stack '${stack_name}' não encontrado. A saltar."
             continue
         fi
 
         echo "-----------------------------------------------------"
-        echo "Implantando o stack: ${NEGRITO}${stack_name}${RESET}..."
+        echo "Processando e implantando o stack: ${NEGRITO}${stack_name}${RESET}..."
         
-        # Executa o docker stack deploy para o ficheiro atual
-        if docker stack deploy --compose-file "$file" "$stack_name"; then
+        # Usa envsubst para substituir as variáveis de ambiente e guarda o resultado
+        envsubst < "$template_file" > "$processed_file"
+
+        # Executa o docker stack deploy para o ficheiro processado
+        if docker stack deploy --compose-file "$processed_file" "$stack_name"; then
             msg_success "Stack '${stack_name}' implantado com sucesso!"
         else
             msg_error "Houve um problema ao implantar o stack '${stack_name}'."
         fi
     done
+    
+    # Limpa os ficheiros processados
+    rm -rf "$PROCESSED_DIR"
 
     # --- RESUMO FINAL ---
     msg_header "🎉 INSTALAÇÃO CONCLUÍDA 🎉"

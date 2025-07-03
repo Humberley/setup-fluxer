@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #-------------------------------------------------------------------------------
-# Script: Instalador de Ambiente Fluxer (Corrigido v5)
+# Script: Instalador de Ambiente Fluxer (Corrigido v6)
 # Descrição: Implementa a lógica de instalação do SetupOrion,
 #            com drop/criação de bancos de dados para garantir ambiente limpo.
 # Autor: Humberley / Gemini
@@ -427,14 +427,19 @@ services:
       - N8N_EDITOR_BASE_URL=https://${N8N_EDITOR_DOMAIN}/
       - WEBHOOK_URL=https://${N8N_WEBHOOK_DOMAIN}/
       - N8N_PROTOCOL=https
+
       - NODE_ENV=production
       - EXECUTIONS_MODE=queue
+      - EXECUTIONS_TIMEOUT=3600 # Adicionado: Timeout para execuções
+      - EXECUTIONS_TIMEOUT_MAX=7200 # Adicionado: Timeout máximo para execuções
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
+      - N8N_RUNNERS_ENABLED=true
+      - N8N_RUNNERS_MODE=internal # Adicionado: Modo de execução dos runners
+
       - N8N_REINSTALL_MISSING_PACKAGES=true
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
       - N8N_NODE_PATH=/home/node/.n8n/nodes
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
-      - N8N_RUNNERS_ENABLED=true
-      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
 
       - N8N_SMTP_SENDER=${SMTP_USER}
       - N8N_SMTP_USER=${SMTP_USER}
@@ -446,9 +451,18 @@ services:
       - QUEUE_BULL_REDIS_HOST=redis
       - QUEUE_BULL_REDIS_PORT=6379
       - QUEUE_BULL_REDIS_DB=2
-      - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash # 'moment-with-locales' removido
+
+      - N8N_METRICS=true # Adicionado: Habilita métricas
+
       - EXECUTIONS_DATA_PRUNE=true
       - EXECUTIONS_DATA_MAX_AGE=336
+
+      - N8N_AI_ENABLED=false # Adicionado: Desabilita recursos de IA
+      - N8N_AI_PROVIDER=openai # Adicionado: Provedor de IA (mesmo desabilitado)
+      - N8N_AI_OPENAI_API_KEY= # Adicionado: Chave da API de IA (mesmo desabilitado)
+
+      - NODE_FUNCTION_ALLOW_BUILTIN=* # Adicionado: Permite módulos built-in em funções personalizadas
+      - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash
 
       - GENERIC_TIMEZONE=America/Sao_Paulo
       - TZ=America/Sao_Paulo
@@ -490,14 +504,19 @@ services:
       - N8N_EDITOR_BASE_URL=https://${N8N_EDITOR_DOMAIN}/
       - WEBHOOK_URL=https://${N8N_WEBHOOK_DOMAIN}/
       - N8N_PROTOCOL=https
+
       - NODE_ENV=production
       - EXECUTIONS_MODE=queue
+      - EXECUTIONS_TIMEOUT=3600 # Adicionado: Timeout para execuções
+      - EXECUTIONS_TIMEOUT_MAX=7200 # Adicionado: Timeout máximo para execuções
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
+      - N8N_RUNNERS_ENABLED=true
+      - N8N_RUNNERS_MODE=internal # Adicionado: Modo de execução dos runners
+
       - N8N_REINSTALL_MISSING_PACKAGES=true
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
       - N8N_NODE_PATH=/home/node/.n8n/nodes
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
-      - N8N_RUNNERS_ENABLED=true
-      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
 
       - N8N_SMTP_SENDER=${SMTP_USER}
       - N8N_SMTP_USER=${SMTP_USER}
@@ -509,9 +528,18 @@ services:
       - QUEUE_BULL_REDIS_HOST=redis
       - QUEUE_BULL_REDIS_PORT=6379
       - QUEUE_BULL_REDIS_DB=2
-      - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash # 'moment-with-locales' removido
+
+      - N8N_METRICS=true # Adicionado: Habilita métricas
+
       - EXECUTIONS_DATA_PRUNE=true
       - EXECUTIONS_DATA_MAX_AGE=336
+
+      - N8N_AI_ENABLED=false # Adicionado: Desabilita recursos de IA
+      - N8N_AI_PROVIDER=openai # Adicionado: Provedor de IA (mesmo desabilitado)
+      - N8N_AI_OPENAI_API_KEY= # Adicionado: Chave da API de IA (mesmo desabilitado)
+
+      - NODE_FUNCTION_ALLOW_BUILTIN=* # Adicionado: Permite módulos built-in em funções personalizadas
+      - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash
 
       - GENERIC_TIMEZONE=America/Sao_Paulo
       - TZ=America/Sao_Paulo
@@ -553,14 +581,19 @@ services:
       - N8N_EDITOR_BASE_URL=https://${N8N_EDITOR_DOMAIN}/
       - WEBHOOK_URL=https://${N8N_WEBHOOK_DOMAIN}/
       - N8N_PROTOCOL=https
+
       - NODE_ENV=production
       - EXECUTIONS_MODE=queue
+      - EXECUTIONS_TIMEOUT=3600 # Adicionado: Timeout para execuções
+      - EXECUTIONS_TIMEOUT_MAX=7200 # Adicionado: Timeout máximo para execuções
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
+      - N8N_RUNNERS_ENABLED=true
+      - N8N_RUNNERS_MODE=internal # Adicionado: Modo de execução dos runners
+
       - N8N_REINSTALL_MISSING_PACKAGES=true
       - N8N_COMMUNITY_PACKAGES_ENABLED=true
       - N8N_NODE_PATH=/home/node/.n8n/nodes
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
-      - N8N_RUNNERS_ENABLED=true
-      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
 
       - N8N_SMTP_SENDER=${SMTP_USER}
       - N8N_SMTP_USER=${SMTP_USER}
@@ -572,9 +605,18 @@ services:
       - QUEUE_BULL_REDIS_HOST=redis
       - QUEUE_BULL_REDIS_PORT=6379
       - QUEUE_BULL_REDIS_DB=2
-      - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash # 'moment-with-locales' removido
+
+      - N8N_METRICS=true # Adicionado: Habilita métricas
+
       - EXECUTIONS_DATA_PRUNE=true
       - EXECUTIONS_DATA_MAX_AGE=336
+
+      - N8N_AI_ENABLED=false # Adicionado: Desabilita recursos de IA
+      - N8N_AI_PROVIDER=openai # Adicionado: Provedor de IA (mesmo desabilitado)
+      - N8N_AI_OPENAI_API_KEY= # Adicionado: Chave da API de IA (mesmo desabilitado)
+
+      - NODE_FUNCTION_ALLOW_BUILTIN=* # Adicionado: Permite módulos built-in em funções personalizadas
+      - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash
 
       - GENERIC_TIMEZONE=America/Sao_Paulo
       - TZ=America/Sao_Paulo

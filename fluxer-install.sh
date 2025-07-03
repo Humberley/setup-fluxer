@@ -5,7 +5,7 @@
 # Descrição: Implementa a lógica de instalação robusta do SetupOrion,
 #            incluindo preparação, deploy, verificação e configuração em etapas.
 # Autor: Humberley / [Seu Nome]
-# Versão: 10.0
+# Versão: 10.1 (YAML embutido para robustez)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -179,13 +179,93 @@ main() {
 
     # --- ETAPA 1: INSTALAR TRAEFIK E PORTAINER ---
     msg_header "[1/3] INSTALANDO TRAEFIK E PORTAINER"
-    for stack_name in "traefik" "portainer"; do
-        echo "---"; echo "Implantando: ${NEGRITO}${stack_name}${RESET}..."
-        envsubst < "stacks/${stack_name}/${stack_name}.template.yml" > "/tmp/${stack_name}.yml"
-        docker stack deploy --compose-file "/tmp/${stack_name}.yml" "$stack_name" || msg_fatal "Falha ao implantar ${stack_name}."
-        msg_success "Stack '${stack_name}' implantado."
-        rm "/tmp/${stack_name}.yml"
-    done
+    
+    # --- Deploy Traefik ---
+    echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}..."
+    cat > /tmp/traefik.yml << EOL
+version: "3.7"
+services:
+  traefik:
+    image: traefik:v2.11
+    command:
+      - "--api.dashboard=true"
+      - "--providers.docker.swarmMode=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--certificatesresolvers.letsencryptresolver.acme.email=${LE_EMAIL}"
+      - "--certificatesresolvers.letsencryptresolver.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge.entrypoint=web"
+      - "--log.level=ERROR"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "volume_swarm_certificates:/letsencrypt"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks:
+      - ${REDE_DOCKER}
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+EOL
+    docker stack deploy --compose-file /tmp/traefik.yml traefik || msg_fatal "Falha ao implantar Traefik."
+    msg_success "Stack 'traefik' implantado."
+    rm /tmp/traefik.yml
+
+    # --- Deploy Portainer ---
+    echo "---"; echo "Implantando: ${NEGRITO}portainer${RESET}..."
+    cat > /tmp/portainer.yml << EOL
+version: "3.7"
+services:
+  agent:
+    image: portainer/agent:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+    networks:
+      - ${REDE_DOCKER}
+    deploy:
+      mode: global
+      placement:
+        constraints: [node.platform.os == linux]
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    command: -H tcp://tasks.agent:9001 --tlsskipverify
+    volumes:
+      - portainer_data:/data
+    networks:
+      - ${REDE_DOCKER}
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.portainer.rule=Host(\`${PORTAINER_DOMAIN}\`)"
+        - "traefik.http.routers.portainer.entrypoints=websecure"
+        - "traefik.http.routers.portainer.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+        - "traefik.docker.network=${REDE_DOCKER}"
+
+volumes:
+  portainer_data:
+    external: true
+    name: portainer_data
+
+networks:
+  ${REDE_DOCKER}:
+    external: true
+EOL
+    docker stack deploy --compose-file /tmp/portainer.yml portainer || msg_fatal "Falha ao implantar Portainer."
+    msg_success "Stack 'portainer' implantado."
+    rm /tmp/portainer.yml
 
     # --- ETAPA 2: VERIFICAR SERVIÇOS E CONFIGURAR PORTAINER ---
     msg_header "[2/3] VERIFICANDO SERVIÇOS E CONFIGURANDO PORTAINER"
@@ -231,9 +311,6 @@ main() {
     local PORTAINER_JWT=$(echo "$jwt_response" | jq -r .jwt)
     if [[ -z "$PORTAINER_JWT" || "$PORTAINER_JWT" == "null" ]]; then msg_fatal "Falha ao obter o token JWT."; fi
     msg_success "Token JWT obtido."
-
-    # A partir daqui, o token JWT ou uma chave de API poderiam ser usados para outras automações.
-    # Por agora, vamos salvar as credenciais principais.
 
     local DADOS_DIR="/root/dados_vps"
     mkdir -p "$DADOS_DIR"

@@ -3,9 +3,9 @@
 #-------------------------------------------------------------------------------
 # Script: Instalador de Ambiente Fluxer (Corrigido)
 # Descrição: Implementa a lógica de instalação do SetupOrion,
-#            com criação explícita de bancos de dados e correções de endpoint.
+#            com drop/criação de bancos de dados para garantir ambiente limpo.
 # Autor: Humberley / Gemini
-# Versão: 13.3 (Final - Evolution YML Atualizado)
+# Versão: 13.4 (Final - Correção de Migração de DB)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -888,7 +888,7 @@ EOL
 
 # Nova função para criar os bancos de dados
 create_databases() {
-    msg_header "CRIANDO BANCOS DE DADOS NO POSTGRES"
+    msg_header "REDEFININDO BANCOS DE DADOS NO POSTGRES"
     
     local postgres_container_id
     local retries=30
@@ -921,16 +921,19 @@ create_databases() {
     done
     msg_success "Postgres está pronto!"
 
-    echo "Criando banco de dados 'n8n_queue'..."
-    docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE n8n_queue;" || msg_warning "Não foi possível criar 'n8n_queue' (pode já existir)."
+    echo "Limpando e recriando banco de dados 'n8n_queue'..."
+    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS n8n_queue;"
+    docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE n8n_queue;"
     
-    echo "Criando banco de dados 'typebot'..."
-    docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE typebot;" || msg_warning "Não foi possível criar 'typebot' (pode já existir)."
+    echo "Limpando e recriando banco de dados 'typebot'..."
+    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS typebot;"
+    docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE typebot;"
 
-    echo "Criando banco de dados 'evolution'..."
-    docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE evolution;" || msg_warning "Não foi possível criar 'evolution' (pode já existir)."
+    echo "Limpando e recriando banco de dados 'evolution'..."
+    docker exec "$postgres_container_id" psql -U postgres -c "DROP DATABASE IF EXISTS evolution;"
+    docker exec "$postgres_container_id" psql -U postgres -c "CREATE DATABASE evolution;"
     
-    msg_success "Bancos de dados configurados."
+    msg_success "Bancos de dados redefinidos com sucesso."
 }
 
 
@@ -946,7 +949,7 @@ main() {
     echo "██║     ███████╗ ╚██████╔╝██║  ██╗███████╗██║   ██     ███████║███████╗   ██║   ╚██████╔╝██║     "
     echo "╚═╝     ╚══════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝    ██     ╚══════╝╚══════╝   ╚═╝    ╚═════╝ ╚═╝     "
     echo -e "${RESET}"
-    echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS (v13.3)${RESET}"
+    echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS (v13.4)${RESET}"
 
     # --- COLETA DE DADOS DO USUÁRIO COM VALIDAÇÃO ---
     msg_header "COLETANDO INFORMAÇÕES"

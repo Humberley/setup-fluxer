@@ -3,9 +3,9 @@
 #-------------------------------------------------------------------------------
 # Script: Instalador de Ambiente Fluxer
 # Descrição: Coleta as informações do usuário, prepara o ambiente Docker Swarm
-#            e inicia cada serviço como uma stack individual, em ordem.
+#            e inicia os serviços através da API do Portainer para gestão centralizada.
 # Autor: Humberley / [Seu Nome]
-# Versão: 4.1 (Solução Definitiva com Rede Robusta)
+# Versão: 4.4 (Corrige controlo de Stacks no Portainer)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -51,6 +51,10 @@ main() {
         msg_warning "Comando 'envsubst' não encontrado. A instalar 'gettext-base'..."
         apt-get update -qq && apt-get install -y gettext-base -qq || msg_error "Falha ao instalar 'gettext-base'."
     fi
+    if ! command -v jq &> /dev/null; then
+        msg_warning "Comando 'jq' não encontrado. A instalar..."
+        apt-get update -qq && apt-get install -y jq -qq || msg_error "Falha ao instalar 'jq'."
+    fi
     msg_success "Dependências prontas."
 
     # --- VERIFICAÇÃO DO DOCKER SWARM ---
@@ -85,12 +89,12 @@ main() {
     done
 
     while true; do
-        read -s -p "🔑 Digite uma senha para o Portainer: " PORTAINER_PASSWORD < /dev/tty; echo
+        read -s -p "🔑 Digite uma senha para o Portainer (mínimo 12 caracteres): " PORTAINER_PASSWORD < /dev/tty; echo
         read -s -p "🔑 Confirme a senha do Portainer: " PORTAINER_PASSWORD_CONFIRM < /dev/tty; echo
-        if [[ "$PORTAINER_PASSWORD" == "$PORTAINER_PASSWORD_CONFIRM" ]] && [[ -n "$PORTAINER_PASSWORD" ]]; then
+        if [[ "$PORTAINER_PASSWORD" == "$PORTAINER_PASSWORD_CONFIRM" ]] && [[ ${#PORTAINER_PASSWORD} -ge 12 ]]; then
             break
         else
-            msg_warning "As senhas não coincidem ou estão vazias. Tente novamente."
+            msg_warning "As senhas não coincidem ou têm menos de 12 caracteres. Tente novamente."
         fi
     done
 
@@ -140,9 +144,7 @@ main() {
     msg_header "PREPARANDO O AMBIENTE SWARM"
     
     echo "Garantindo a existência da rede Docker overlay '${REDE_DOCKER}'..."
-    # Remove a rede se ela existir, para garantir que podemos criá-la com o tipo correto.
     docker network rm "$REDE_DOCKER" >/dev/null 2>&1
-    # Cria a rede com o driver overlay, essencial para o Swarm.
     if ! docker network create --driver=overlay --attachable "$REDE_DOCKER"; then
         msg_error "Falha ao criar a rede overlay '${REDE_DOCKER}'."
     fi
@@ -158,56 +160,113 @@ main() {
     docker volume create "volume_swarm_shared" >/dev/null
     msg_success "Volumes prontos."
 
-    # --- INICIANDO OS STACKS INDIVIDUALMENTE ---
+    # --- INICIANDO OS STACKS ---
     msg_header "INICIANDO OS STACKS DE SERVIÇOS"
     
     local STACKS_DIR="stacks"
     local PROCESSED_DIR="processed_stacks"
     mkdir -p "$PROCESSED_DIR"
 
-    # Define a ordem correta de implantação para garantir que as dependências sejam satisfeitas
-    local DEPLOY_ORDER=(
-        "traefik"
-        "redis"
-        "postgres"
-        "portainer"
-        "minio"
-        "n8n"
-        "typebot"
-        "evolution"
-    )
+    # Ordem de implantação: primeiro os serviços base via CLI, depois o resto via API
+    local DEPLOY_ORDER_CLI=("traefik" "portainer")
+    local DEPLOY_ORDER_API=("redis" "postgres" "minio" "n8n" "typebot" "evolution")
 
-    for stack_name in "${DEPLOY_ORDER[@]}"; do
+    # ETAPA 1: Implantar serviços base via CLI
+    for stack_name in "${DEPLOY_ORDER_CLI[@]}"; do
         local template_file="${STACKS_DIR}/${stack_name}/${stack_name}.template.yml"
-        local processed_file="${PROCESSED_DIR}/${stack_name}.yml"
+        if [ ! -f "$template_file" ]; then msg_warning "Ficheiro para '${stack_name}' não encontrado. A saltar."; continue; fi
         
-        if [ ! -f "$template_file" ]; then
-            msg_warning "Ficheiro de template para o stack '${stack_name}' não encontrado. A saltar."
-            continue
-        fi
-
         echo "-----------------------------------------------------"
-        echo "Processando e implantando o stack: ${NEGRITO}${stack_name}${RESET}..."
+        echo "Implantando o stack base: ${NEGRITO}${stack_name}${RESET}..."
         
-        # Usa envsubst para substituir as variáveis de ambiente e guarda o resultado
-        # Esta é a forma mais robusta de garantir que o Docker receba um YML limpo
-        envsubst < "$template_file" > "$processed_file"
-
-        # Executa o docker stack deploy para o ficheiro processado
-        if docker stack deploy --compose-file "$processed_file" "$stack_name"; then
+        if docker stack deploy --compose-file "$template_file" "$stack_name"; then
             msg_success "Stack '${stack_name}' implantado com sucesso!"
         else
             msg_error "Houve um problema ao implantar o stack '${stack_name}'."
         fi
     done
+
+    # ETAPA 2: Configurar Portainer e gerar chave de API automaticamente
+    msg_header "CONFIGURANDO PORTAINER E GERANDO CHAVE DE API"
+    echo "A aguardar que o Portainer fique online em https://${PORTAINER_DOMAIN}..."
+    until $(curl --output /dev/null --silent --head --fail -k "https://${PORTAINER_DOMAIN}/api/health"); do
+        printf '.'
+        sleep 5
+    done
+    echo -e "\n${VERDE}Portainer está online!${RESET}"
+
+    echo "A criar utilizador 'admin' do Portainer..."
+    curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/users/admin/init" \
+        -H "Content-Type: application/json" \
+        --data "{\"Password\": \"${PORTAINER_PASSWORD}\"}" > /dev/null
+
+    echo "A autenticar na API do Portainer para obter token JWT..."
+    local jwt_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/auth" \
+        -H "Content-Type: application/json" \
+        --data "{\"username\": \"admin\", \"password\": \"${PORTAINER_PASSWORD}\"}")
+    local PORTAINER_JWT=$(echo "$jwt_response" | jq -r .jwt)
+
+    if [[ -z "$PORTAINER_JWT" || "$PORTAINER_JWT" == "null" ]]; then
+        msg_error "Falha ao obter o token JWT do Portainer. Verifique a senha e o estado do serviço."
+    fi
+    msg_success "Token JWT obtido com sucesso."
+
+    echo "A gerar chave de API do Portainer..."
+    local apikey_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/users/admin/tokens" \
+        -H "Authorization: Bearer ${PORTAINER_JWT}" \
+        -H "Content-Type: application/json" \
+        --data '{"description": "fluxer_installer_key"}')
+    local PORTAINER_API_KEY=$(echo "$apikey_response" | jq -r .raw)
+
+    if [[ -z "$PORTAINER_API_KEY" || "$PORTAINER_API_KEY" == "null" ]]; then
+        msg_error "Falha ao gerar a chave de API do Portainer."
+    fi
+    msg_success "Chave de API do Portainer gerada e pronta para uso!"
+
+    # ETAPA 3: Implantar o resto dos stacks via API do Portainer
+    msg_header "IMPLANTANDO STACKS DE APLICAÇÃO VIA API DO PORTAINER"
+    local ENDPOINT_ID=1 # O endpoint local do Swarm é geralmente 1
+
+    for stack_name in "${DEPLOY_ORDER_API[@]}"; do
+        local template_file="${STACKS_DIR}/${stack_name}/${stack_name}.template.yml"
+        local processed_file="${PROCESSED_DIR}/${stack_name}.yml"
+        
+        if [ ! -f "$template_file" ]; then msg_warning "Ficheiro para '${stack_name}' não encontrado. A saltar."; continue; fi
+
+        echo "-----------------------------------------------------"
+        echo "Processando e implantando o stack: ${NEGRITO}${stack_name}${RESET}..."
+        
+        envsubst < "$template_file" > "$processed_file"
+        local COMPOSE_CONTENT=$(cat "$processed_file")
+
+        # Cria o payload JSON para a API do Portainer (sem a chave SwarmID)
+        local JSON_PAYLOAD=$(jq -n \
+            --arg name "$stack_name" \
+            --arg content "$COMPOSE_CONTENT" \
+            '{Name: $name, StackFileContent: $content}')
+
+        # Faz a chamada à API para criar o stack
+        local response=$(curl -s -k -X POST \
+            -H "X-API-Key: ${PORTAINER_API_KEY}" \
+            -H "Content-Type: application/json" \
+            --data-binary @- \
+            "https://${PORTAINER_DOMAIN}/api/stacks?type=1&method=string&endpointId=${ENDPOINT_ID}" <<< "$JSON_PAYLOAD")
+
+        # Verifica se a resposta contém um erro
+        if echo "$response" | jq -e '.message' > /dev/null; then
+            local error_message=$(echo "$response" | jq -r '.message')
+            msg_error "Falha ao implantar '${stack_name}' via API: ${error_message}"
+        else
+            msg_success "Stack '${stack_name}' implantado com sucesso via API do Portainer!"
+        fi
+    done
     
-    # Limpa os ficheiros processados
     rm -rf "$PROCESSED_DIR"
 
     # --- RESUMO FINAL ---
     msg_header "🎉 INSTALAÇÃO CONCLUÍDA 🎉"
     echo "Aguarde alguns minutos para que todos os serviços sejam iniciados."
-    echo "Pode verificar o estado com o comando: ${NEGRITO}docker service ls${RESET}"
+    echo "Pode verificar o estado no seu painel Portainer ou com o comando: ${NEGRITO}docker service ls${RESET}"
     echo "Abaixo estão os seus links de acesso:"
     echo
     echo -e "${NEGRITO}Painel Portainer:   https://${PORTAINER_DOMAIN}${RESET}"

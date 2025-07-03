@@ -1,17 +1,12 @@
 #!/bin/bash
 
-# Cores
+# Cores e estilos
 VERDE='\033[1;32m'
 AZUL='\033[1;34m'
 AMARELO='\033[1;33m'
 VERMELHO='\033[1;31m'
 NEGRITO='\033[1m'
 RESET='\033[0m'
-
-# Função para gerar strings seguras
-generate_secret() {
-  openssl rand -hex 16
-}
 
 clear
 echo -e "${AZUL}${NEGRITO}"
@@ -25,107 +20,192 @@ echo -e "${RESET}"
 echo -e "${VERDE}${NEGRITO}🛠 INSTALADOR FLUXER - CONFIGURAÇÃO COMPLETA DA VPS${RESET}"
 echo
 
-# Coleta de variáveis essenciais
-echo -e "${AZUL}${NEGRITO}🌐 CONFIGURAÇÃO INICIAL:${RESET}"
-read -p "➤ Nome da rede Docker Swarm: " REDE_DOCKER
-read -p "➤ E-mail para certificados SSL: " LE_EMAIL
+# Explicação sobre o wildcard
+echo -e "${AZUL}${NEGRITO}🌐 ANTES DE CONTINUAR:${RESET}"
+echo -e "${AMARELO}Configure um registro DNS WILDCARD na sua Cloudflare assim:${RESET}"
+echo -e "${NEGRITO}Tipo:    A{RESET}"
+echo -e "${NEGRITO}Nome:    *{RESET}"
+echo -e "${NEGRITO}IP:      (mesmo IP desta VPS){RESET}"
+echo -e "${NEGRITO}Proxy:   DNS only (⚠️ desativado){RESET}"
+echo
+echo -e "${AZUL}Isso permitirá que os seguintes subdomínios funcionem automaticamente:${RESET}"
+echo -e "  • portainer"
+echo -e "  • n8n, nwn (webhook)"
+echo -e "  • tpb, tpv (typebot)"
+echo -e "  • minio, s3"
+echo -e "  • evo (evolution api)"
+echo
 
-# Domínios
-echo -e "\n${AZUL}${NEGRITO}🌐 DOMÍNIOS DOS SERVIÇOS:${RESET}"
-read -p "➤ Domínio do Portainer: " PORTAINER_DOMAIN
-read -p "➤ Domínio do N8N (editor): " N8N_EDITOR_DOMAIN
-read -p "➤ Domínio do N8N (webhook): " N8N_WEBHOOK_DOMAIN
-read -p "➤ Domínio do Typebot (editor): " TYPEBOT_EDITOR_DOMAIN
-read -p "➤ Domínio do Typebot (viewer): " TYPEBOT_VIEWER_DOMAIN
-read -p "➤ Domínio do MinIO (painel): " MINIO_CONSOLE_DOMAIN
-read -p "➤ Domínio do MinIO (S3): " MINIO_S3_DOMAIN
-read -p "➤ Domínio da Evolution API: " EVOLUTION_DOMAIN
+# Solicita domínio raiz
+read -p "🌐 Qual é o domínio principal (ex: fluxer.com.br): " DOMINIO_RAIZ
 
-# Senhas e dados sensíveis
-echo -e "\n${AZUL}${NEGRITO}🔐 CREDENCIAIS:${RESET}"
-read -s -p "➤ Senha do Portainer: " PORTAINER_PASSWORD && echo
-read -p "➤ Usuário root do MinIO: " MINIO_ROOT_USER
-read -s -p "➤ Senha root do MinIO (mín. 8 caracteres): " MINIO_ROOT_PASSWORD && echo
-read -p "➤ E-mail SMTP (usado pelo n8n e Typebot): " N8N_SMTP_USER
-read -s -p "➤ Senha SMTP (app password): " N8N_SMTP_PASS && echo
+# Gera subdomínios automaticamente
+PORTAINER_DOMAIN="portainer.${DOMINIO_RAIZ}"
+N8N_EDITOR_DOMAIN="n8n.${DOMINIO_RAIZ}"
+N8N_WEBHOOK_DOMAIN="nwn.${DOMINIO_RAIZ}"
+TYPEBOT_EDITOR_DOMAIN="tpb.${DOMINIO_RAIZ}"
+TYPEBOT_VIEWER_DOMAIN="tpv.${DOMINIO_RAIZ}"
+MINIO_CONSOLE_DOMAIN="minio.${DOMINIO_RAIZ}"
+MINIO_S3_DOMAIN="s3.${DOMINIO_RAIZ}"
+EVOLUTION_DOMAIN="evo.${DOMINIO_RAIZ}"
 
-# Variáveis geradas automaticamente
-POSTGRES_PASSWORD=$(generate_secret)
-N8N_ENCRYPTION_KEY=$(generate_secret)
-TYPEBOT_ENCRYPTION_KEY=$(generate_secret)
-EVOLUTION_API_KEY=$(generate_secret)
-
-# Volumes fixos
-PORTAINER_VOLUME="portainer_data"
-POSTGRES_VOLUME="postgres_data"
-REDIS_VOLUME="redis_data"
-MINIO_VOLUME="minio_data"
-EVOLUTION_VOLUME="evolution_instances"
-S3_ENABLED="false"
-S3_ACCESS_KEY=""
-S3_SECRET_KEY=""
-S3_ENDPOINT=$MINIO_S3_DOMAIN
-REDIS_URI="redis://redis:6379/8"
-
-# Criar arquivo .env
-echo -e "\n${AZUL}${NEGRITO}📄 Gerando arquivo .env...${RESET}"
-
+# Criação do .env
+echo -e "\n📄 Gerando arquivo .env..."
 cat > .env <<EOF
 # Rede e certificados
-REDE_DOCKER=$REDE_DOCKER
-LE_EMAIL=$LE_EMAIL
+REDE_DOCKER=fluxerNet
+LE_EMAIL=fluxerautoma@gmail.com
 
 # Portainer
-PORTAINER_DOMAIN=$PORTAINER_DOMAIN
-PORTAINER_PASSWORD=$PORTAINER_PASSWORD
-PORTAINER_VOLUME=$PORTAINER_VOLUME
+PORTAINER_DOMAIN=${PORTAINER_DOMAIN}
+PORTAINER_PASSWORD=admin
+PORTAINER_VOLUME=portainer_data
 
 # PostgreSQL
-POSTGRES_PASSWORD=$POSTGRES_PASSWORD
-POSTGRES_VOLUME=$POSTGRES_VOLUME
+POSTGRES_PASSWORD=$(openssl rand -hex 16)
+POSTGRES_VOLUME=postgres_data
 
 # Redis
-REDIS_VOLUME=$REDIS_VOLUME
-REDIS_URI=$REDIS_URI
+REDIS_VOLUME=redis_data
+REDIS_URI=redis://redis:6379/8
 
 # MinIO
-MINIO_CONSOLE_DOMAIN=$MINIO_CONSOLE_DOMAIN
-MINIO_S3_DOMAIN=$MINIO_S3_DOMAIN
-MINIO_ROOT_USER=$MINIO_ROOT_USER
-MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD
-MINIO_VOLUME=$MINIO_VOLUME
-S3_ENABLED=$S3_ENABLED
-S3_ACCESS_KEY=$S3_ACCESS_KEY
-S3_SECRET_KEY=$S3_SECRET_KEY
-S3_ENDPOINT=$S3_ENDPOINT
+MINIO_CONSOLE_DOMAIN=${MINIO_CONSOLE_DOMAIN}
+MINIO_S3_DOMAIN=${MINIO_S3_DOMAIN}
+MINIO_ROOT_USER=admin
+MINIO_ROOT_PASSWORD=admin@3535
+MINIO_VOLUME=minio_data
+S3_ENABLED=false
+S3_ACCESS_KEY=
+S3_SECRET_KEY=
+S3_ENDPOINT=${MINIO_S3_DOMAIN}
 
 # n8n
-N8N_EDITOR_DOMAIN=$N8N_EDITOR_DOMAIN
-N8N_WEBHOOK_DOMAIN=$N8N_WEBHOOK_DOMAIN
-N8N_ENCRYPTION_KEY=$N8N_ENCRYPTION_KEY
-N8N_SMTP_USER=$N8N_SMTP_USER
-N8N_SMTP_PASS=$N8N_SMTP_PASS
+N8N_EDITOR_DOMAIN=${N8N_EDITOR_DOMAIN}
+N8N_WEBHOOK_DOMAIN=${N8N_WEBHOOK_DOMAIN}
+N8N_ENCRYPTION_KEY=$(openssl rand -hex 16)
+N8N_SMTP_USER=fluxerautoma@gmail.com
+N8N_SMTP_PASS=teste
 
 # Typebot
-TYPEBOT_EDITOR_DOMAIN=$TYPEBOT_EDITOR_DOMAIN
-TYPEBOT_VIEWER_DOMAIN=$TYPEBOT_VIEWER_DOMAIN
-TYPEBOT_ENCRYPTION_KEY=$TYPEBOT_ENCRYPTION_KEY
+TYPEBOT_EDITOR_DOMAIN=${TYPEBOT_EDITOR_DOMAIN}
+TYPEBOT_VIEWER_DOMAIN=${TYPEBOT_VIEWER_DOMAIN}
+TYPEBOT_ENCRYPTION_KEY=$(openssl rand -hex 16)
 
 # Evolution
-EVOLUTION_DOMAIN=$EVOLUTION_DOMAIN
-EVOLUTION_API_KEY=$EVOLUTION_API_KEY
-EVOLUTION_VOLUME=$EVOLUTION_VOLUME
+EVOLUTION_DOMAIN=${EVOLUTION_DOMAIN}
+EVOLUTION_API_KEY=$(openssl rand -hex 16)
+EVOLUTION_VOLUME=evolution_instances
 EOF
 
-echo -e "${VERDE}✔ .env criado com sucesso!${RESET}"
+echo -e "✔ .env criado com sucesso!"
 
-# Deploy dos serviços na ordem correta
-echo -e "\n${AZUL}${NEGRITO}🚀 Realizando deploy dos serviços...${RESET}"
 
-SERVICOS=(traefik redis postgres portainer minio n8n typebot evolution)
-for servico in "${SERVICOS[@]}"; do
-  echo -e "${AMARELO}🔧 Deploy do serviço: $servico${RESET}"
-  envsubst < stacks/$servico/${servico}.template.yml | docker stack deploy -c - $servico
-done
+# Solicita senha do Portainer
+read -s -p "🔑 Senha do Portainer: " PORTAINER_PASSWORD
+echo
 
-echo -e "\n${VERDE}${NEGRITO}✅ Instalação finalizada com sucesso!${RESET}"
+# Solicita usuário e senha do MinIO
+read -p "👤 Usuário root do MinIO: " MINIO_ROOT_USER
+read -s -p "🔑 Senha root do MinIO: " MINIO_ROOT_PASSWORD
+echo
+
+# Solicita chave da Evolution API
+echo
+
+
+# Criação do .env
+echo -e "\n📄 Gerando arquivo .env..."
+cat > .env <<EOF
+# Rede e certificados
+REDE_DOCKER=fluxerNet
+LE_EMAIL=fluxerautoma@gmail.com
+
+# Portainer
+PORTAINER_DOMAIN=${PORTAINER_DOMAIN}
+PORTAINER_PASSWORD=${PORTAINER_PASSWORD}
+PORTAINER_VOLUME=portainer_data
+
+# PostgreSQL
+POSTGRES_PASSWORD=$(openssl rand -hex 16)
+POSTGRES_VOLUME=postgres_data
+
+# Redis
+REDIS_VOLUME=redis_data
+REDIS_URI=redis://redis:6379/8
+
+# MinIO
+MINIO_CONSOLE_DOMAIN=${MINIO_CONSOLE_DOMAIN}
+MINIO_S3_DOMAIN=${MINIO_S3_DOMAIN}
+MINIO_ROOT_USER=${MINIO_ROOT_USER}
+MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+MINIO_VOLUME=minio_data
+S3_ENABLED=false
+S3_ACCESS_KEY=
+S3_SECRET_KEY=
+S3_ENDPOINT=${MINIO_S3_DOMAIN}
+
+# n8n
+N8N_EDITOR_DOMAIN=${N8N_EDITOR_DOMAIN}
+N8N_WEBHOOK_DOMAIN=${N8N_WEBHOOK_DOMAIN}
+N8N_ENCRYPTION_KEY=$(openssl rand -hex 16)
+N8N_SMTP_USER=fluxerautoma@gmail.com
+N8N_SMTP_PASS=teste
+
+# Typebot
+TYPEBOT_EDITOR_DOMAIN=${TYPEBOT_EDITOR_DOMAIN}
+TYPEBOT_VIEWER_DOMAIN=${TYPEBOT_VIEWER_DOMAIN}
+TYPEBOT_ENCRYPTION_KEY=$(openssl rand -hex 16)
+
+# Evolution
+EVOLUTION_DOMAIN=${EVOLUTION_DOMAIN}
+EVOLUTION_API_KEY=${EVOLUTION_API_KEY}
+EVOLUTION_VOLUME=evolution_instances
+EOF
+
+echo -e "✔ .env criado com sucesso!"
+# Explicação sobre o wildcard
+echo -e "${AZUL}${NEGRITO}🌐 ANTES DE CONTINUAR:${RESET}"
+echo -e "${AMARELO}Configure um registro DNS WILDCARD na sua Cloudflare assim:${RESET}"
+echo -e "${NEGRITO}Tipo:    A${RESET}"
+echo -e "${NEGRITO}Nome:    *${RESET}"
+echo -e "${NEGRITO}IP:      (mesmo IP desta VPS)${RESET}"
+echo -e "${NEGRITO}Proxy:   DNS only (⚠️ desativado)${RESET}"
+echo
+echo -e "${AZUL}Isso permitirá que os seguintes subdomínios funcionem automaticamente:${RESET}"
+echo -e "  • portainer"
+echo -e "  • n8n, nwn (webhook)"
+echo -e "  • tpb, tpv (typebot)"
+echo -e "  • minio, s3"
+echo -e "  • evo (evolution api)"
+echo
+
+# Solicita domínio raiz
+read -p "🌐 Qual é o domínio principal (ex: fluxer.com.br): " DOMINIO_RAIZ
+
+# Gera subdomínios automaticamente
+PORTAINER_DOMAIN="portainer.${DOMINIO_RAIZ}"
+N8N_EDITOR_DOMAIN="n8n.${DOMINIO_RAIZ}"
+N8N_WEBHOOK_DOMAIN="nwn.${DOMINIO_RAIZ}"
+TYPEBOT_EDITOR_DOMAIN="tpb.${DOMINIO_RAIZ}"
+TYPEBOT_VIEWER_DOMAIN="tpv.${DOMINIO_RAIZ}"
+MINIO_CONSOLE_DOMAIN="minio.${DOMINIO_RAIZ}"
+MINIO_S3_DOMAIN="s3.${DOMINIO_RAIZ}"
+EVOLUTION_DOMAIN="evo.${DOMINIO_RAIZ}"
+
+
+# Mostrar credenciais e URLs
+echo -e "\n${AZUL}${NEGRITO}🔑 RESUMO FINAL:${RESET}"
+echo -e "${VERDE}Painel Portainer:     https://${PORTAINER_DOMAIN}${RESET}"
+echo -e "${VERDE}Painel n8n (editor):  https://${N8N_EDITOR_DOMAIN}${RESET}"
+echo -e "${VERDE}Webhook n8n:          https://${N8N_WEBHOOK_DOMAIN}${RESET}"
+echo -e "${VERDE}Builder Typebot:      https://${TYPEBOT_EDITOR_DOMAIN}${RESET}"
+echo -e "${VERDE}Viewer Typebot:       https://${TYPEBOT_VIEWER_DOMAIN}${RESET}"
+echo -e "${VERDE}MinIO Painel:         https://${MINIO_CONSOLE_DOMAIN}${RESET}"
+echo -e "${VERDE}MinIO S3:             https://${MINIO_S3_DOMAIN}${RESET}"
+echo -e "${VERDE}Evolution API:        https://${EVOLUTION_DOMAIN}${RESET}"
+echo
+echo -e "${NEGRITO}🔐 Senha do Portainer:       ${PORTAINER_PASSWORD}${RESET}"
+echo -e "${NEGRITO}🔐 Usuário root do MinIO:    ${MINIO_ROOT_USER}${RESET}"
+echo -e "${NEGRITO}🔐 Senha root do MinIO:      ${MINIO_ROOT_PASSWORD}${RESET}"
+echo -e "${NEGRITO}🔐 Chave da Evolution API:   ${EVOLUTION_API_KEY}${RESET}"

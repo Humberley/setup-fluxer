@@ -5,7 +5,7 @@
 # Descrição: Implementa a lógica de instalação robusta do SetupOrion,
 #            incluindo preparação, deploy, verificação e configuração em etapas.
 # Autor: Humberley / [Seu Nome]
-# Versão: 10.4 (Usa a configuração Traefik v3 fornecida)
+# Versão: 10.5 (Corrigido para Traefik v3)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -132,7 +132,6 @@ wait_stack() {
     done
 }
 
-
 # === FUNÇÃO PRINCIPAL ===
 main() {
     clear
@@ -164,15 +163,23 @@ main() {
 
     # --- PREPARAÇÃO DO AMBIENTE SWARM ---
     msg_header "PREPARANDO O AMBIENTE SWARM"
-    echo "Garantindo a existência da rede Docker overlay '${REDE_DOCKER}'..."; docker network rm "$REDE_DOCKER" >/dev/null 2>&1; docker network create --driver=overlay --attachable "$REDE_DOCKER" || msg_fatal "Falha ao criar a rede overlay '${REDE_DOCKER}'."; msg_success "Rede '${REDE_DOCKER}' pronta."
-    echo "Criando os volumes Docker..."; docker volume create "portainer_data" >/dev/null; docker volume create "volume_swarm_certificates" >/dev/null; docker volume create "volume_swarm_shared" >/dev/null; msg_success "Volumes prontos."
+    echo "Garantindo a existência da rede Docker overlay '${REDE_DOCKER}'..."
+    docker network rm "$REDE_DOCKER" >/dev/null 2>&1
+    docker network create --driver=overlay --attachable "$REDE_DOCKER" || msg_fatal "Falha ao criar a rede overlay '${REDE_DOCKER}'."
+    msg_success "Rede '${REDE_DOCKER}' pronta."
+    
+    echo "Criando os volumes Docker..."
+    docker volume create "portainer_data" >/dev/null
+    docker volume create "volume_swarm_certificates" >/dev/null
+    docker volume create "volume_swarm_shared" >/dev/null
+    msg_success "Volumes prontos."
 
     # --- ETAPA 1: INSTALAR TRAEFIK E PORTAINER ---
     msg_header "[1/3] INSTALANDO TRAEFIK E PORTAINER"
     
-   # --- Deploy Traefik ---
-echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}..."
-cat > /tmp/traefik.yml << EOL
+    # --- Deploy Traefik ---
+    echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}..."
+    cat > /tmp/traefik.yml << EOL
 version: "3.7"
 services:
   traefik:
@@ -227,6 +234,9 @@ volumes:
   volume_swarm_shared:
     external: true
 EOL
+    docker stack deploy --compose-file /tmp/traefik.yml traefik || msg_fatal "Falha ao implantar Traefik."
+    msg_success "Stack 'traefik' implantado."
+    rm /tmp/traefik.yml
 
     # --- Deploy Portainer ---
     echo "---"; echo "Implantando: ${NEGRITO}portainer${RESET}..."

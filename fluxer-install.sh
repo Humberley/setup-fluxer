@@ -3,9 +3,9 @@
 #-------------------------------------------------------------------------------
 # Script: Instalador de Ambiente Fluxer
 # Descrição: Implementa a lógica de instalação robusta do SetupOrion,
-#            incluindo preparação, deploy, verificação e configuração em etapas.
+#            com configurações YAML embutidas para máxima robustez.
 # Autor: Humberley / [Seu Nome]
-# Versão: 11.7 (Corrige método de deploy da API e adiciona logs)
+# Versão: 12.0 (Final - YAML Embutido)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -145,39 +145,28 @@ wait_stack() {
 # Função para implantar um stack via API do Portainer
 deploy_stack_via_api() {
     local stack_name=$1
-    local api_key=$2
-    local portainer_domain=$3
-    local swarm_id=$4
+    local compose_content=$2
+    local api_key=$3
+    local portainer_domain=$4
+    local swarm_id=$5
     local endpoint_id=1
-    local stacks_dir="stacks"
-    local processed_dir="processed_stacks"
-
-    local template_file="${stacks_dir}/${stack_name}/${stack_name}.template.yml"
-    local processed_file="${processed_dir}/${stack_name}.yml"
-    
-    if [ ! -f "$template_file" ]; then
-        msg_warning "Ficheiro de template para '${stack_name}' não encontrado. A saltar."
-        return 1
-    fi
 
     echo "-----------------------------------------------------"
-    echo "Processando e implantando o stack: ${NEGRITO}${stack_name}${RESET}..."
-    
-    envsubst < "$template_file" > "$processed_file"
+    echo "Implantando o stack: ${NEGRITO}${stack_name}${RESET}..."
 
-    msg_warning "--- DEBUG: Enviando o seguinte pedido para a API ---"
-    echo "URL: https://${portainer_domain}/api/stacks/create/swarm/file?endpointId=${endpoint_id}"
-    echo "Stack Name: ${stack_name}"
-    echo "Swarm ID: ${swarm_id}"
-    echo "---------------------------------------------"
+    local json_payload
+    json_payload=$(jq -n \
+        --arg name "$stack_name" \
+        --arg content "$compose_content" \
+        --arg swarmID "$swarm_id" \
+        '{Name: $name, StackFileContent: $content, SwarmID: $swarmID}')
 
     local response
     response=$(curl -s -k -w "\n%{http_code}" -X POST \
         -H "X-API-Key: ${api_key}" \
-        -F "Name=${stack_name}" \
-        -F "SwarmID=${swarm_id}" \
-        -F "file=@${processed_file}" \
-        "https://${portainer_domain}/api/stacks/create/swarm/file?endpointId=${endpoint_id}")
+        -H "Content-Type: application/json" \
+        --data-binary "$json_payload" \
+        "https://${portainer_domain}/api/stacks?type=1&method=string&endpointId=${endpoint_id}")
     
     local http_code
     http_code=$(tail -n1 <<< "$response")
@@ -194,6 +183,343 @@ deploy_stack_via_api() {
         echo "Resposta completa da API: ${response_body}"
         return 1
     fi
+}
+
+# === FUNÇÕES DE GERAÇÃO DE YAML ===
+
+generate_traefik_yml() {
+cat << EOL
+version: "3.7"
+services:
+  traefik:
+    image: traefik:v3.0
+    command:
+      - "--api.dashboard=true"
+      - "--providers.swarm=true"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=${REDE_DOCKER}"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--certificatesresolvers.letsencryptresolver.acme.email=${LE_EMAIL}"
+      - "--certificatesresolvers.letsencryptresolver.acme.storage=/etc/traefik/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge.entrypoint=web"
+      - "--log.level=DEBUG"
+      - "--log.filePath=/var/log/traefik/traefik.log"
+      - "--accesslog=true"
+      - "--accesslog.filepath=/var/log/traefik/access.log"
+    ports: [ "80:80", "443:443" ]
+    volumes: [ "volume_swarm_certificates:/etc/traefik/letsencrypt", "/var/run/docker.sock:/var/run/docker.sock:ro", "volume_swarm_shared:/var/log/traefik" ]
+    networks: [ ${REDE_DOCKER} ]
+    deploy:
+      placement:
+        constraints: [ "node.role == manager" ]
+networks:
+  ${REDE_DOCKER}:
+    external: true
+volumes:
+  volume_swarm_certificates:
+    external: true
+  volume_swarm_shared:
+    external: true
+EOL
+}
+
+generate_portainer_yml() {
+cat << EOL
+version: "3.7"
+services:
+  agent:
+    image: portainer/agent:latest
+    volumes: [ "/var/run/docker.sock:/var/run/docker.sock", "/var/lib/docker/volumes:/var/lib/docker/volumes" ]
+    networks: [ ${REDE_DOCKER} ]
+    deploy:
+      mode: global
+      placement: { constraints: [node.platform.os == linux] }
+  portainer:
+    image: portainer/portainer-ce:latest
+    command: -H tcp://tasks.agent:9001 --tlsskipverify
+    volumes: [ "portainer_data:/data" ]
+    networks: [ ${REDE_DOCKER} ]
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement: { constraints: [node.role == manager] }
+      labels: [ "traefik.enable=true", "traefik.http.routers.portainer.rule=Host(\`${PORTAINER_DOMAIN}\`)", "traefik.http.routers.portainer.entrypoints=websecure", "traefik.http.routers.portainer.tls.certresolver=letsencryptresolver", "traefik.http.services.portainer.loadbalancer.server.port=9000", "traefik.docker.network=${REDE_DOCKER}" ]
+volumes:
+  portainer_data:
+    external: true
+networks:
+  ${REDE_DOCKER}:
+    external: true
+EOL
+}
+
+generate_redis_yml() {
+cat << EOL
+version: "3.7"
+services:
+  redis:
+    image: redis:latest
+    command: [ "redis-server", "--appendonly", "yes", "--port", "6379" ]
+    volumes:
+      - redis_data:/data
+    networks:
+      - ${REDE_DOCKER}
+    deploy:
+      placement:
+        constraints: [ "node.role == manager" ]
+volumes:
+  redis_data:
+    external: true
+    name: redis_data
+networks:
+  ${REDE_DOCKER}:
+    external: true
+EOL
+}
+
+generate_postgres_yml() {
+cat << EOL
+version: "3.7"
+services:
+  postgres:
+    image: postgres:14
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ${REDE_DOCKER}
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - PG_MAX_CONNECTIONS=500
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints: [ "node.role == manager" ]
+volumes:
+  postgres_data:
+    external: true
+    name: postgres_data
+networks:
+  ${REDE_DOCKER}:
+    external: true
+EOL
+}
+
+generate_minio_yml() {
+cat << EOL
+version: "3.7"
+services:
+  minio:
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - ${REDE_DOCKER}
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_BROWSER_REDIRECT_URL=https://${MINIO_CONSOLE_DOMAIN}
+      - MINIO_SERVER_URL=https://${MINIO_S3_DOMAIN}
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints: [ "node.role == manager" ]
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.minio_public.rule=Host(\`${MINIO_S3_DOMAIN}\`)"
+        - "traefik.http.routers.minio_public.entrypoints=websecure"
+        - "traefik.http.routers.minio_public.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.minio_public.loadbalancer.server.port=9000"
+        - "traefik.http.routers.minio_console.rule=Host(\`${MINIO_CONSOLE_DOMAIN}\`)"
+        - "traefik.http.routers.minio_console.entrypoints=websecure"
+        - "traefik.http.routers.minio_console.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.minio_console.loadbalancer.server.port=9001"
+volumes:
+  minio_data:
+    external: true
+    name: minio_data
+networks:
+  ${REDE_DOCKER}:
+    external: true
+EOL
+}
+
+generate_n8n_yml() {
+cat << EOL
+version: "3.7"
+services:
+  n8n_editor:
+    image: n8nio/n8n:latest
+    command: start
+    networks: [ ${REDE_DOCKER} ]
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_DATABASE=n8n_queue
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_USER=postgres
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_HOST=${N8N_EDITOR_DOMAIN}
+      - WEBHOOK_URL=https://${N8N_WEBHOOK_DOMAIN}/
+      - GENERIC_TIMEZONE=America/Sao_Paulo
+      - TZ=America/Sao_Paulo
+      - QUEUE_BULL_REDIS_HOST=redis
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement: { constraints: [ "node.role == manager" ] }
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.n8n_editor.rule=Host(\`${N8N_EDITOR_DOMAIN}\`)"
+        - "traefik.http.routers.n8n_editor.entrypoints=websecure"
+        - "traefik.http.routers.n8n_editor.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.n8n_editor.loadbalancer.server.port=5678"
+  n8n_webhook:
+    image: n8nio/n8n:latest
+    command: webhook
+    networks: [ ${REDE_DOCKER} ]
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_DATABASE=n8n_queue
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_USER=postgres
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_HOST=${N8N_EDITOR_DOMAIN}
+      - WEBHOOK_URL=https://${N8N_WEBHOOK_DOMAIN}/
+      - GENERIC_TIMEZONE=America/Sao_Paulo
+      - TZ=America/Sao_Paulo
+      - QUEUE_BULL_REDIS_HOST=redis
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement: { constraints: [ "node.role == manager" ] }
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.n8n_webhook.rule=Host(\`${N8N_WEBHOOK_DOMAIN}\`)"
+        - "traefik.http.routers.n8n_webhook.entrypoints=websecure"
+        - "traefik.http.routers.n8n_webhook.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.n8n_webhook.loadbalancer.server.port=5678"
+  n8n_worker:
+    image: n8nio/n8n:latest
+    command: worker --concurrency=10
+    networks: [ ${REDE_DOCKER} ]
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_DATABASE=n8n_queue
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_USER=postgres
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - QUEUE_BULL_REDIS_HOST=redis
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement: { constraints: [ "node.role == manager" ] }
+networks:
+  ${REDE_DOCKER}:
+    external: true
+EOL
+}
+
+generate_typebot_yml() {
+cat << EOL
+version: "3.7"
+services:
+  typebot_builder:
+    image: baptistearno/typebot-builder:latest
+    networks: [ ${REDE_DOCKER} ]
+    environment:
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/typebot
+      - ENCRYPTION_SECRET=${TYPEBOT_ENCRYPTION_KEY}
+      - NEXTAUTH_URL=https://${TYPEBOT_EDITOR_DOMAIN}
+      - NEXT_PUBLIC_VIEWER_URL=https://${TYPEBOT_VIEWER_DOMAIN}
+      - S3_ACCESS_KEY=${MINIO_ROOT_USER}
+      - S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - S3_BUCKET=typebot
+      - S3_ENDPOINT=${MINIO_S3_DOMAIN}
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement: { constraints: [ "node.role == manager" ] }
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.typebot_builder.rule=Host(\`${TYPEBOT_EDITOR_DOMAIN}\`)"
+        - "traefik.http.routers.typebot_builder.entrypoints=websecure"
+        - "traefik.http.routers.typebot_builder.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.typebot_builder.loadbalancer.server.port=3000"
+  typebot_viewer:
+    image: baptistearno/typebot-viewer:latest
+    networks: [ ${REDE_DOCKER} ]
+    environment:
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/typebot
+      - ENCRYPTION_SECRET=${TYPEBOT_ENCRYPTION_KEY}
+      - NEXTAUTH_URL=https://${TYPEBOT_EDITOR_DOMAIN}
+      - NEXT_PUBLIC_VIEWER_URL=https://${TYPEBOT_VIEWER_DOMAIN}
+      - S3_ACCESS_KEY=${MINIO_ROOT_USER}
+      - S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - S3_BUCKET=typebot
+      - S3_ENDPOINT=${MINIO_S3_DOMAIN}
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement: { constraints: [ "node.role == manager" ] }
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.typebot_viewer.rule=Host(\`${TYPEBOT_VIEWER_DOMAIN}\`)"
+        - "traefik.http.routers.typebot_viewer.entrypoints=websecure"
+        - "traefik.http.routers.typebot_viewer.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.typebot_viewer.loadbalancer.server.port=3000"
+networks:
+  ${REDE_DOCKER}:
+    external: true
+EOL
+}
+
+generate_evolution_yml() {
+cat << EOL
+version: "3.7"
+services:
+  evolution:
+    image: atendai/evolution-api:latest
+    volumes:
+      - evolution_instances:/evolution/instances
+    networks:
+      - ${REDE_DOCKER}
+    environment:
+      - SERVER_URL=https://${EVOLUTION_DOMAIN}
+      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY}
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/evolution
+      - CACHE_REDIS_ENABLED=true
+      - CACHE_REDIS_URI=redis://redis:6379
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints: [ "node.role == manager" ]
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.evolution.rule=Host(\`${EVOLUTION_DOMAIN}\`)"
+        - "traefik.http.routers.evolution.entrypoints=websecure"
+        - "traefik.http.routers.evolution.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.evolution.loadbalancer.server.port=8080"
+volumes:
+  evolution_instances:
+    external: true
+    name: evolution_instances
+networks:
+  ${REDE_DOCKER}:
+    external: true
+EOL
 }
 
 
@@ -249,74 +575,13 @@ main() {
     # --- ETAPA 1: INSTALAR TRAEFIK E PORTAINER ---
     msg_header "[1/4] INSTALANDO TRAEFIK E PORTAINER"
     
-    # --- Deploy Traefik ---
-    echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}..."; cat > /tmp/traefik.yml << EOL
-version: "3.7"
-services:
-  traefik:
-    image: traefik:v3.0
-    command:
-      - "--api.dashboard=true"
-      - "--providers.swarm=true"
-      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
-      - "--providers.docker.exposedbydefault=false"
-      - "--providers.docker.network=${REDE_DOCKER}"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
-      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
-      - "--certificatesresolvers.letsencryptresolver.acme.email=${LE_EMAIL}"
-      - "--certificatesresolvers.letsencryptresolver.acme.storage=/etc/traefik/letsencrypt/acme.json"
-      - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge=true"
-      - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge.entrypoint=web"
-      - "--log.level=DEBUG"
-      - "--log.filePath=/var/log/traefik/traefik.log"
-      - "--accesslog=true"
-      - "--accesslog.filepath=/var/log/traefik/access.log"
-    ports: [ "80:80", "443:443" ]
-    volumes: [ "volume_swarm_certificates:/etc/traefik/letsencrypt", "/var/run/docker.sock:/var/run/docker.sock:ro", "volume_swarm_shared:/var/log/traefik" ]
-    networks: [ ${REDE_DOCKER} ]
-    deploy:
-      placement:
-        constraints: [ "node.role == manager" ]
-networks:
-  ${REDE_DOCKER}:
-    external: true
-volumes:
-  volume_swarm_certificates:
-    external: true
-  volume_swarm_shared:
-    external: true
-EOL
-    docker stack deploy --compose-file /tmp/traefik.yml traefik || msg_fatal "Falha ao implantar Traefik."; msg_success "Stack 'traefik' implantado."; rm /tmp/traefik.yml
-    echo "---"; echo "Implantando: ${NEGRITO}portainer${RESET}..."; cat > /tmp/portainer.yml << EOL
-version: "3.7"
-services:
-  agent:
-    image: portainer/agent:latest
-    volumes: [ "/var/run/docker.sock:/var/run/docker.sock", "/var/lib/docker/volumes:/var/lib/docker/volumes" ]
-    networks: [ ${REDE_DOCKER} ]
-    deploy:
-      mode: global
-      placement: { constraints: [node.platform.os == linux] }
-  portainer:
-    image: portainer/portainer-ce:latest
-    command: -H tcp://tasks.agent:9001 --tlsskipverify
-    volumes: [ "portainer_data:/data" ]
-    networks: [ ${REDE_DOCKER} ]
-    deploy:
-      mode: replicated
-      replicas: 1
-      placement: { constraints: [node.role == manager] }
-      labels: [ "traefik.enable=true", "traefik.http.routers.portainer.rule=Host(\`${PORTAINER_DOMAIN}\`)", "traefik.http.routers.portainer.entrypoints=websecure", "traefik.http.routers.portainer.tls.certresolver=letsencryptresolver", "traefik.http.services.portainer.loadbalancer.server.port=9000", "traefik.docker.network=${REDE_DOCKER}" ]
-volumes:
-  portainer_data:
-    external: true
-networks:
-  ${REDE_DOCKER}:
-    external: true
-EOL
-    docker stack deploy --compose-file /tmp/portainer.yml portainer || msg_fatal "Falha ao implantar Portainer."; msg_success "Stack 'portainer' implantado."; rm /tmp/portainer.yml
+    echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}...";
+    docker stack deploy --compose-file <(generate_traefik_yml) traefik || msg_fatal "Falha ao implantar Traefik."
+    msg_success "Stack 'traefik' implantado."
+    
+    echo "---"; echo "Implantando: ${NEGRITO}portainer${RESET}...";
+    docker stack deploy --compose-file <(generate_portainer_yml) portainer || msg_fatal "Falha ao implantar Portainer."
+    msg_success "Stack 'portainer' implantado."
 
     # --- ETAPA 2: VERIFICAR SERVIÇOS E CONFIGURAR PORTAINER ---
     msg_header "[2/4] VERIFICANDO SERVIÇOS E CONFIGURANDO PORTAINER"
@@ -344,12 +609,13 @@ EOL
 
     # --- ETAPA 4: IMPLANTAR STACKS DE APLICAÇÃO VIA API ---
     msg_header "[4/4] IMPLANTANDO STACKS DE APLICAÇÃO"
-    local PROCESSED_DIR="processed_stacks"; mkdir -p "$PROCESSED_DIR"
-    local DEPLOY_ORDER_API=("redis" "postgres" "minio" "n8n" "typebot" "evolution")
-    for stack_name in "${DEPLOY_ORDER_API[@]}"; do
-        deploy_stack_via_api "$stack_name" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
-    done
-    rm -rf "$PROCESSED_DIR"
+    
+    deploy_stack_via_api "redis" "$(generate_redis_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
+    deploy_stack_via_api "postgres" "$(generate_postgres_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
+    deploy_stack_via_api "minio" "$(generate_minio_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
+    deploy_stack_via_api "n8n" "$(generate_n8n_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
+    deploy_stack_via_api "typebot" "$(generate_typebot_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
+    deploy_stack_via_api "evolution" "$(generate_evolution_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
 
     # --- RESUMO FINAL ---
     msg_header "🎉 INSTALAÇÃO CONCLUÍDA 🎉"

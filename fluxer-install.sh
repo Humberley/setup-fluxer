@@ -5,7 +5,7 @@
 # Descrição: Coleta as informações do usuário, gera o .env e inicia cada
 #            serviço como uma stack individual no Docker Swarm.
 # Autor: Humberley / [Seu Nome]
-# Versão: 2.4 (Corrige erro de chave YAML)
+# Versão: 3.2 (Corrige erro de sintaxe YML)
 #-------------------------------------------------------------------------------
 
 # === VARIÁVEIS DE CORES E ESTILOS ===
@@ -128,60 +128,66 @@ main() {
     
     msg_success "Configurações geradas e exportadas para o ambiente."
 
-    # --- CRIAÇÃO DO FICHEIRO .ENV ---
-    echo "Criando o ficheiro de configuração .env..."
-    cat > .env <<EOF
-# Gerado por Fluxer Installer v2.4 em $(date)
-
-# --- GERAL ---
-REDE_DOCKER=fluxerNet
-LE_EMAIL=${LE_EMAIL}
-
-# --- PORTAINER ---
-PORTAINER_DOMAIN=${PORTAINER_DOMAIN}
-PORTAINER_PASSWORD=${PORTAINER_PASSWORD}
-
-# --- BANCO DE DADOS (PostgreSQL) ---
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-
-# --- ARMAZENAMENTO (MinIO) ---
-MINIO_CONSOLE_DOMAIN=${MINIO_CONSOLE_DOMAIN}
-MINIO_S3_DOMAIN=${MINIO_S3_DOMAIN}
-MINIO_ROOT_USER=${MINIO_ROOT_USER}
-MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-
-# --- N8N ---
-N8N_EDITOR_DOMAIN=${N8N_EDITOR_DOMAIN}
-N8N_WEBHOOK_DOMAIN=${N8N_WEBHOOK_DOMAIN}
-N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
-
-# --- TYPEBOT ---
-TYPEBOT_EDITOR_DOMAIN=${TYPEBOT_EDITOR_DOMAIN}
-TYPEBOT_VIEWER_DOMAIN=${TYPEBOT_VIEWER_DOMAIN}
-TYPEBOT_ENCRYPTION_KEY=${TYPEBOT_ENCRYPTION_KEY}
-
-# --- EVOLUTION API ---
-EVOLUTION_DOMAIN=${EVOLUTION_DOMAIN}
-EVOLUTION_API_KEY=${EVOLUTION_API_KEY}
-EOF
-    msg_success "Ficheiro .env criado com sucesso!"
-
-    # --- CHAMADA DA NOVA FUNÇÃO ---
-    build_compose_file
-
-    # --- INICIANDO OS SERVIÇOS ---
-    msg_header "INICIANDO OS SERVIÇOS"
+    # --- PREPARAÇÃO DO AMBIENTE SWARM ---
+    msg_header "PREPARANDO O AMBIENTE SWARM"
     
-    echo "Criando a rede Docker (se não existir)..."
-    docker network create fluxerNet >/dev/null 2>&1
+    echo "Criando a rede Docker overlay (se não existir)..."
+    docker network create --driver=overlay --attachable "$REDE_DOCKER" >/dev/null 2>&1
+    msg_success "Rede '${REDE_DOCKER}' pronta."
+
+    echo "Criando os volumes Docker (se não existirem)..."
+    docker volume create "$PORTAINER_VOLUME" >/dev/null
+    docker volume create "$POSTGRES_VOLUME" >/dev/null
+    docker volume create "$REDIS_VOLUME" >/dev/null
+    docker volume create "$MINIO_VOLUME" >/dev/null
+    docker volume create "$EVOLUTION_VOLUME" >/dev/null
+    docker volume create "volume_swarm_certificates" >/dev/null
+    docker volume create "volume_swarm_shared" >/dev/null
+    msg_success "Volumes prontos."
+
+    # --- ADAPTANDO FICHEIROS DE CONFIGURAÇÃO (NOVA ETAPA) ---
+    msg_header "ADAPTANDO FICHEIROS DE CONFIGURAÇÃO"
     
-    echo "Iniciando os contentores com 'docker-compose up -d'..."
-    msg_warning "Este processo pode levar vários minutos. Por favor, aguarde."
-    if docker-compose up -d; then
-        msg_success "Todos os serviços foram iniciados com sucesso!"
-    else
-        msg_error "Houve um problema ao iniciar os serviços com o Docker Compose."
+    local STACKS_DIR="stacks"
+    for file in $(find "$STACKS_DIR" -type f -name "*.template.yml"); do
+        # O Docker Swarm não precisa das definições de volumes/redes externas
+        # nos ficheiros de compose se eles já existem.
+        # Esta etapa remove essas secções para evitar erros de sintaxe com variáveis.
+        echo "Adaptando o ficheiro: ${file}..."
+        tmp_file=$(mktemp)
+        # Usa awk para remover as secções de topo 'volumes:' e 'networks:'
+        awk '
+            /^volumes:|^networks:/ { in_block=1; next }
+            in_block && !/^[ \t]/ { in_block=0 }
+            !in_block { print }
+        ' "$file" > "$tmp_file"
+        mv "$tmp_file" "$file"
+    done
+    msg_success "Ficheiros de configuração adaptados."
+
+
+    # --- INICIANDO OS STACKS INDIVIDUALMENTE ---
+    msg_header "INICIANDO OS STACKS DE SERVIÇOS"
+    
+    if [ ! -d "$STACKS_DIR" ]; then
+        msg_error "O diretório '${STACKS_DIR}' contendo os templates não foi encontrado."
     fi
+
+    # Itera sobre cada ficheiro .template.yml e cria uma stack para cada um
+    for file in $(find "$STACKS_DIR" -type f -name "*.template.yml" | sort); do
+        # Extrai o nome do ficheiro para usar como nome da stack (ex: "traefik")
+        stack_name=$(basename "$file" .template.yml)
+        
+        echo "-----------------------------------------------------"
+        echo "Implantando o stack: ${NEGRITO}${stack_name}${RESET}..."
+        
+        # Executa o docker stack deploy para o ficheiro atual
+        if docker stack deploy --compose-file "$file" "$stack_name"; then
+            msg_success "Stack '${stack_name}' implantado com sucesso!"
+        else
+            msg_error "Houve um problema ao implantar o stack '${stack_name}'."
+        fi
+    done
 
     # --- RESUMO FINAL ---
     msg_header "🎉 INSTALAÇÃO CONCLUÍDA 🎉"

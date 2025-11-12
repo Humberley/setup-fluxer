@@ -153,7 +153,7 @@ deploy_stack_via_api() {
     local stack_name=$1
     local compose_content=$2
     local api_key=$3
-    local portainer_domain=$4
+    local portainer_host=$4  # pode ser domínio ou IP:porta
     local swarm_id=$5
     local endpoint_id=1
     local temp_file="/tmp/${stack_name}_deploy.yml"
@@ -161,32 +161,46 @@ deploy_stack_via_api() {
     echo "-----------------------------------------------------"
     echo "Implantando o stack: ${NEGRITO}${stack_name}${RESET}..."
 
+    # Determinar protocolo (HTTP para IPs locais, HTTPS para domínios)
+    local protocol="https"
+    if [[ "$portainer_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+        protocol="http"
+        echo "Usando HTTP para IP: ${portainer_host}"
+    else
+        echo "Usando HTTPS para domínio: ${portainer_host}"
+    fi
+
     # Salva o conteúdo gerado num ficheiro temporário
     echo -e "$compose_content" > "$temp_file"
 
     local response
-    response=$(curl -s -k -w "\n%{http_code}" -X POST \
+    response=$(curl -s -k -w "\n%{http_code}" \
+        --connect-timeout 15 \
+        --max-time 30 \
+        -X POST \
         -H "X-API-Key: ${api_key}" \
         -F "Name=${stack_name}" \
         -F "SwarmID=${swarm_id}" \
         -F "file=@${temp_file}" \
-        "https://${portainer_domain}/api/stacks/create/swarm/file?endpointId=${endpoint_id}")
-    
+        "${protocol}://${portainer_host}/api/stacks/create/swarm/file?endpointId=${endpoint_id}")
+
     rm "$temp_file" # Limpa o ficheiro temporário
 
     local http_code
-    http_code=$(tail -n1 <<< "$response")
+    http_code=$(tail -n1 <<< "$response" | tr -cd '0-9' | tail -c 3)
     local response_body
     response_body=$(sed '$ d' <<< "$response")
 
-    if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
-        msg_success "Stack '${stack_name}' implantado com sucesso via API do Portainer!"
+    if [[ "$http_code" == "200" ]] || [[ "$http_code" == "201" ]]; then
+        msg_success "Stack '${stack_name}' implantado com sucesso via API!"
         return 0
     else
         local error_message
         error_message=$(echo "$response_body" | jq -r '.message, .details' 2>/dev/null | tr '\n' ' ')
-        msg_error "Falha ao implantar '${stack_name}' via API (Código: ${http_code}): ${error_message}"
-        echo "Resposta completa da API: ${response_body}"
+        msg_error "Falha ao implantar '${stack_name}' (Código: ${http_code})"
+        echo "Erro: ${error_message}"
+        echo "URL usada: ${protocol}://${portainer_host}/api/stacks/create/swarm/file"
+        echo "Resposta completa: ${response_body:0:500}"
         return 1
     fi
 }
@@ -1373,185 +1387,229 @@ main() {
     wait_stack "traefik" "traefik"
     wait_stack "portainer" "portainer"
 
-    echo "Aguardando 10 segundos para estabilização inicial..."
-    sleep 10
+    echo "Aguardando 15 segundos para estabilização inicial..."
+    sleep 15
 
-    # === DIAGNÓSTICO INICIAL ===
+    # === DIAGNÓSTICO INICIAL ROBUSTO ===
     echo -e "\n${NEGRITO}Executando diagnóstico inicial do Portainer...${RESET}"
 
-    echo "1. Status do serviço:"
-    docker service ps portainer_portainer --format "{{.CurrentState}}" | head -n1
+    # Obter container ID real (não service)
+    echo -e "\n1. Identificando container Portainer..."
+    local PORTAINER_CONTAINER_ID
+    PORTAINER_CONTAINER_ID=$(docker ps --filter "name=portainer_portainer" --format "{{.ID}}" | head -n1)
 
-    echo -e "\n2. Últimas 5 linhas do log:"
-    docker service logs portainer_portainer --tail 5 2>/dev/null
+    if [ -z "$PORTAINER_CONTAINER_ID" ]; then
+        msg_warning "Não foi possível encontrar container do Portainer em execução."
+        echo "Listando todos containers:"
+        docker ps --format "table {{.Names}}\t{{.Status}}\t{{.ID}}"
+        msg_fatal "Container do Portainer não está em execução."
+    fi
 
-    echo -e "\n3. Porta 9000 no netstat/ss:"
-    (netstat -tulpn 2>/dev/null || ss -tulpn 2>/dev/null) | grep 9000 || echo "Porta 9000 não encontrada ainda"
+    echo "Container ID: ${PORTAINER_CONTAINER_ID}"
 
-    echo -e "\n4. IP do container Portainer:"
-    docker service inspect portainer_portainer --format '{{range .Endpoint.VirtualIPs}}{{.Addr}}{{end}}' 2>/dev/null || echo "Não foi possível obter IP"
+    # Status detalhado do container
+    echo -e "\n2. Status do container:"
+    docker inspect "$PORTAINER_CONTAINER_ID" --format 'Estado: {{.State.Status}} | Saúde: {{.State.Health.Status}} | PID: {{.State.Pid}}'
+
+    # Obter IPs do container
+    echo -e "\n3. IPs do container Portainer:"
+    local CONTAINER_IP_PRIMARY
+    local CONTAINER_IP_SECONDARY
+    CONTAINER_IP_PRIMARY=$(docker inspect "$PORTAINER_CONTAINER_ID" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' | awk '{print $1}')
+    CONTAINER_IP_SECONDARY=$(docker service inspect portainer_portainer --format '{{range .Endpoint.VirtualIPs}}{{.Addr}}{{end}}' 2>/dev/null | cut -d'/' -f1 | head -n1)
+
+    echo "IP Primário (container): ${CONTAINER_IP_PRIMARY}"
+    echo "IP Secundário (overlay): ${CONTAINER_IP_SECONDARY}"
+
+    # Logs usando container ID direto
+    echo -e "\n4. Logs do container (últimas 10 linhas):"
+    docker logs "$PORTAINER_CONTAINER_ID" --tail 10 --since 60s 2>&1 || echo "Não foi possível obter logs do container"
+
+    # Verificar portas
+    echo -e "\n5. Portas publicadas:"
+    docker port "$PORTAINER_CONTAINER_ID" 2>/dev/null || echo "Nenhuma porta mapeada"
+
+    echo -e "\n6. Portas listening no host:"
+    (netstat -tulpn 2>/dev/null || ss -tulpn 2>/dev/null) | grep -E "(9000|9443)" || echo "Portas 9000/9443 não encontradas"
 
     # === VERIFICAÇÃO 1: AGUARDAR "starting HTTP server" NOS LOGS ===
     echo -e "\n${NEGRITO}[Verificação 1/5]${RESET} Aguardando Portainer iniciar servidor HTTP..."
-    echo "Monitorando logs até ver 'starting HTTP server'..."
+    echo "Monitorando logs do container até ver 'starting HTTP server'..."
     local log_retries=60
     local http_log_found=false
 
     while [ $log_retries -gt 0 ]; do
-        if docker service logs portainer_portainer --tail 30 2>/dev/null | grep -q "starting HTTP server"; then
+        # Usar docker logs com container ID real
+        if docker logs "$PORTAINER_CONTAINER_ID" --tail 50 --since 120s 2>&1 | grep -q "starting HTTP server"; then
             msg_success "Portainer iniciou o servidor HTTP (confirmado via logs)."
             http_log_found=true
             break
         fi
-        printf "."
+
+        # Debug a cada 10 tentativas
+        if [ $((log_retries % 10)) -eq 0 ]; then
+            echo -e "\n  [Debug] Aguardando 'starting HTTP server' (tentativa $((60 - log_retries + 1))/60)"
+            echo "  Últimas 3 linhas do log:"
+            docker logs "$PORTAINER_CONTAINER_ID" --tail 3 2>&1 | sed 's/^/    /'
+        else
+            printf "."
+        fi
+
         sleep 2
         ((log_retries--))
-
-        # Debug a cada 15 tentativas
-        if [ $((log_retries % 15)) -eq 0 ]; then
-            echo -e "\n  [Debug] Ainda aguardando 'starting HTTP server' nos logs..."
-            echo "  Última linha do log:"
-            docker service logs portainer_portainer --tail 1 2>/dev/null
-        fi
     done
     echo ""
 
     if [ "$http_log_found" = false ]; then
         msg_warning "Não detectamos 'starting HTTP server' nos logs após 120 segundos."
-        echo "Logs atuais completos:"
-        docker service logs portainer_portainer --tail 20
+        echo "Logs completos do container:"
+        docker logs "$PORTAINER_CONTAINER_ID" --tail 30 2>&1
         msg_fatal "Portainer não está inicializando corretamente."
     fi
 
-    # Aguardar MAIS tempo após confirmar que HTTP iniciou
-    echo "Aguardando 20 segundos para servidor HTTP ficar totalmente operacional..."
-    sleep 20
+    # Aguardar tempo adicional para API estar pronta
+    echo "Aguardando 15 segundos para API ficar operacional..."
+    sleep 15
 
-    # === VERIFICAÇÃO 2: PORTA TCP ABERTA ===
-    echo -e "\n${NEGRITO}[Verificação 2/5]${RESET} Testando conexão TCP na porta 9000..."
-    local port_retries=30
-    while ! nc -z localhost 9000 2>/dev/null && [ $port_retries -gt 0 ]; do
-        printf "."
-        sleep 2
-        ((port_retries--))
-    done
-    echo ""
+    # === VERIFICAÇÃO 2: ESTRATÉGIA MULTI-ENDPOINT PARA ACESSAR PORTAINER ===
+    echo -e "\n${NEGRITO}[Verificação 2/5]${RESET} Testando conectividade com Portainer usando múltiplas estratégias..."
 
-    if [ $port_retries -le 0 ]; then
-        msg_error "Porta 9000 não está aceitando conexões TCP."
-        echo "Portas abertas:"
-        (netstat -tulpn 2>/dev/null || ss -tulpn 2>/dev/null) | grep -E "(9000|9443)"
-        msg_fatal "Portainer não ficou acessível na porta 9000."
+    # Preparar lista de endpoints para testar
+    local PORTAINER_ENDPOINTS=()
+    local PORTAINER_WORKING_ENDPOINT=""
+
+    # Estratégia 1: IP direto do container (mais confiável, sem dependências)
+    if [ -n "$CONTAINER_IP_PRIMARY" ]; then
+        PORTAINER_ENDPOINTS+=("http://${CONTAINER_IP_PRIMARY}:9000")
     fi
-    msg_success "Porta 9000 está aceitando conexões TCP."
+    if [ -n "$CONTAINER_IP_SECONDARY" ] && [ "$CONTAINER_IP_SECONDARY" != "$CONTAINER_IP_PRIMARY" ]; then
+        PORTAINER_ENDPOINTS+=("http://${CONTAINER_IP_SECONDARY}:9000")
+    fi
 
-    # === VERIFICAÇÃO 3: HTTP REALMENTE RESPONDENDO ===
-    echo -e "\n${NEGRITO}[Verificação 3/5]${RESET} Testando se HTTP está respondendo requisições..."
-    echo "Usando múltiplas estratégias de teste..."
-    local http_retries=40
-    local http_works=false
-    local attempt_count=0
+    # Estratégia 2: localhost com IPv4 explícito
+    PORTAINER_ENDPOINTS+=("http://127.0.0.1:9000")
 
-    while [ $http_retries -gt 0 ]; do
-        ((attempt_count++))
+    # Estratégia 3: localhost padrão
+    PORTAINER_ENDPOINTS+=("http://localhost:9000")
 
-        # Estratégia 1: Tentar obter conteúdo HTML
-        local html_test
-        html_test=$(curl -s --connect-timeout 5 --max-time 10 http://localhost:9000/ 2>/dev/null | head -c 100)
+    # Estratégia 4: Domínio via Traefik (apenas se DNS estiver configurado)
+    # Não adicionar por enquanto, testar apenas se outros falharem
 
-        if [[ -n "$html_test" ]] && [[ "$html_test" =~ [a-zA-Z] ]]; then
-            msg_success "Servidor HTTP está respondendo com conteúdo!"
-            echo "Primeiros caracteres da resposta: ${html_test:0:50}..."
-            http_works=true
-            break
+    echo "Endpoints a serem testados:"
+    for idx in "${!PORTAINER_ENDPOINTS[@]}"; do
+        echo "  $((idx + 1)). ${PORTAINER_ENDPOINTS[$idx]}"
+    done
+
+    # Função para testar um endpoint
+    test_portainer_endpoint() {
+        local endpoint="$1"
+        local test_path="${2:-/}"
+
+        # Testar conteúdo HTML
+        local html_response
+        html_response=$(curl -s --connect-timeout 5 --max-time 10 "${endpoint}${test_path}" 2>/dev/null)
+
+        if [[ -n "$html_response" ]] && [[ "$html_response" =~ [a-zA-Z] ]]; then
+            return 0  # Sucesso
         fi
 
-        # Estratégia 2: Verificar código HTTP
+        # Testar código HTTP
         local http_code
-        http_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 http://localhost:9000/ 2>/dev/null)
-        http_code=$(echo "$http_code" | tr -cd '0-9' | tail -c 3)
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "${endpoint}${test_path}" 2>/dev/null)
 
         if [[ "$http_code" =~ ^[2-5][0-9][0-9]$ ]]; then
-            msg_success "Servidor HTTP está respondendo (HTTP ${http_code})."
-            http_works=true
-            break
+            return 0  # Sucesso
         fi
 
-        # Debug a cada 10 tentativas
-        if [ $((attempt_count % 10)) -eq 0 ]; then
-            echo -e "\n  [Debug] Tentativa ${attempt_count}/40"
-            echo "  HTTP Code: '${http_code}' | HTML Response: '${html_test:0:30}'"
-            echo "  Testando IPv4 explicitamente:"
-            curl -4 -v -s --connect-timeout 3 --max-time 5 http://127.0.0.1:9000/ 2>&1 | head -n 15
-        elif [ $((attempt_count % 5)) -eq 0 ]; then
-            echo -e "\n  Tentativa ${attempt_count}/40 - aguardando HTTP responder..."
-        else
-            printf "."
-        fi
+        return 1  # Falha
+    }
 
-        sleep 3
-        ((http_retries--))
+    # Tentar cada endpoint
+    local endpoint_found=false
+    local max_attempts_per_endpoint=10
+
+    for endpoint in "${PORTAINER_ENDPOINTS[@]}"; do
+        echo -e "\n${NEGRITO}Testando: ${endpoint}${RESET}"
+
+        for attempt in $(seq 1 $max_attempts_per_endpoint); do
+            if test_portainer_endpoint "$endpoint" "/"; then
+                msg_success "Endpoint funcionando: ${endpoint}"
+                PORTAINER_WORKING_ENDPOINT="$endpoint"
+                endpoint_found=true
+                break 2  # Sai dos dois loops
+            fi
+
+            if [ $attempt -eq 5 ]; then
+                echo "  Tentativa 5/${max_attempts_per_endpoint} - ainda testando..."
+            else
+                printf "."
+            fi
+
+            sleep 2
+        done
+
+        msg_warning "Endpoint não respondeu após ${max_attempts_per_endpoint} tentativas."
     done
+
     echo ""
 
-    if [ "$http_works" = false ]; then
-        msg_error "Servidor HTTP não está respondendo após 120 segundos."
-        echo -e "\n${AMARELO}=== DIAGNÓSTICO COMPLETO ===${RESET}"
-        echo -e "\n1. Teste curl verbose completo:"
-        curl -v http://localhost:9000/ 2>&1 | head -n 30
-        echo -e "\n2. Teste curl com IPv4:"
-        curl -4 -v http://127.0.0.1:9000/ 2>&1 | head -n 30
-        echo -e "\n3. Logs completos do Portainer:"
-        docker service logs portainer_portainer --tail 50
-        echo -e "\n4. Status do container:"
-        docker service ps portainer_portainer --no-trunc
-        echo -e "\n5. Inspect do serviço:"
-        docker service inspect portainer_portainer --pretty
-        msg_fatal "Portainer HTTP não está funcional."
+    if [ "$endpoint_found" = false ]; then
+        msg_error "Nenhum endpoint do Portainer respondeu após testar todas as estratégias."
+        echo -e "\n${AMARELO}=== DIAGNÓSTICO DETALHADO ===${RESET}"
+
+        echo -e "\n1. Status do container:"
+        docker inspect "$PORTAINER_CONTAINER_ID" --format 'Estado: {{.State.Status}} | PID: {{.State.Pid}} | Reinícios: {{.RestartCount}}'
+
+        echo -e "\n2. Logs do container (últimas 30 linhas):"
+        docker logs "$PORTAINER_CONTAINER_ID" --tail 30 2>&1
+
+        echo -e "\n3. Teste manual de cada endpoint:"
+        for endpoint in "${PORTAINER_ENDPOINTS[@]}"; do
+            echo "  Testando ${endpoint}:"
+            curl -v "${endpoint}/" 2>&1 | head -n 10 | sed 's/^/    /'
+            echo ""
+        done
+
+        msg_fatal "Não foi possível estabelecer comunicação com o Portainer."
     fi
 
     # === VERIFICAÇÃO 3: API RESPONDENDO ===
-    echo -e "\n${NEGRITO}[Verificação 3/5]${RESET} Verificando se a API está inicializada..."
-    echo "Isso pode levar até 2 minutos..."
-    local api_retries=60  # 2 minutos total
+    echo -e "\n${NEGRITO}[Verificação 3/5]${RESET} Verificando se a API do Portainer está respondendo..."
+    echo "Usando endpoint: ${PORTAINER_WORKING_ENDPOINT}"
+
+    local api_retries=60
     local api_ready=false
     local api_attempt=0
 
     while [ $api_retries -gt 0 ]; do
         ((api_attempt++))
 
-        # Testar diretamente o endpoint que vamos usar
+        # Testar endpoint /api/users/admin/check
         local check_response
-        check_response=$(curl -s --connect-timeout 3 --max-time 5 http://localhost:9000/api/users/admin/check 2>/dev/null)
+        check_response=$(curl -s --connect-timeout 5 --max-time 10 "${PORTAINER_WORKING_ENDPOINT}/api/users/admin/check" 2>/dev/null)
+
+        # Verificar se recebeu resposta válida
+        if [[ "$check_response" == "true" ]] || [[ "$check_response" == "false" ]]; then
+            msg_success "API está respondendo!"
+            echo "Resposta de /api/users/admin/check: ${check_response}"
+            api_ready=true
+            break
+        fi
+
+        # Aceitar qualquer JSON válido também
+        if echo "$check_response" | jq -e . >/dev/null 2>&1; then
+            msg_success "API está respondendo com JSON válido!"
+            api_ready=true
+            break
+        fi
 
         # Debug a cada 10 tentativas
         if [ $((api_attempt % 10)) -eq 0 ]; then
             echo -e "\n  [Debug] Tentativa ${api_attempt}/60"
-            echo "  Resposta de /api/users/admin/check: '${check_response}'"
-
-            # Mostrar logs recentes
+            echo "  Resposta: '${check_response:0:100}'"
             echo "  Últimas 3 linhas do log:"
-            docker service logs portainer_portainer --tail 3 2>/dev/null | sed 's/^/    /'
-        fi
-
-        # Verifica se recebeu uma resposta válida (true ou false)
-        if [[ "$check_response" == "true" ]] || [[ "$check_response" == "false" ]]; then
-            msg_success "API do Portainer está respondendo!"
-            echo "Endpoint /api/users/admin/check retornou: ${check_response}"
-            api_ready=true
-            break
-        fi
-
-        # Também aceitar respostas JSON válidas de qualquer endpoint
-        if echo "$check_response" | jq -e . >/dev/null 2>&1; then
-            msg_success "API do Portainer está respondendo com JSON válido!"
-            echo "Resposta: ${check_response}"
-            api_ready=true
-            break
-        fi
-
-        # A cada 5 tentativas (mas não nas de 10), mostrar progresso simples
-        if [ $((api_attempt % 5)) -eq 0 ] && [ $((api_attempt % 10)) -ne 0 ]; then
+            docker logs "$PORTAINER_CONTAINER_ID" --tail 3 2>&1 | sed 's/^/    /'
+        elif [ $((api_attempt % 5)) -eq 0 ]; then
             echo -e "\n  Tentativa ${api_attempt}/60 - aguardando API..."
         else
             printf "."
@@ -1563,79 +1621,63 @@ main() {
     echo ""
 
     if [ "$api_ready" = false ]; then
-        msg_error "API não respondeu após 120 segundos (2 minutos) de tentativas."
-        echo -e "\n${AMARELO}Informações de diagnóstico completas:${RESET}"
-
-        echo -e "\n1. Testando conectividade HTTP direta:"
-        curl -v http://localhost:9000/ 2>&1 | head -n 25
-
-        echo -e "\n2. Testando endpoint /api/status:"
-        curl -v http://localhost:9000/api/status 2>&1 | head -n 25
-
-        echo -e "\n3. Logs completos do Portainer (últimas 50 linhas):"
-        docker service logs portainer_portainer --tail 50
-
-        echo -e "\n4. Status do container:"
-        docker service ps portainer_portainer --no-trunc
-
+        msg_error "API não respondeu após 120 segundos."
+        echo -e "\n${AMARELO}=== DIAGNÓSTICO DA API ===${RESET}"
+        echo "1. Teste do endpoint /api/status:"
+        curl -v "${PORTAINER_WORKING_ENDPOINT}/api/status" 2>&1 | head -n 20
+        echo -e "\n2. Logs completos:"
+        docker logs "$PORTAINER_CONTAINER_ID" --tail 50 2>&1
         msg_fatal "API do Portainer não está funcional."
     fi
 
     # === VERIFICAÇÃO 4: CHECAR SE ADMIN JÁ EXISTE ===
     echo -e "\n${NEGRITO}[Verificação 4/5]${RESET} Verificando se usuário admin já foi criado..."
     local admin_check
-    admin_check=$(curl -s --connect-timeout 3 --max-time 5 http://localhost:9000/api/users/admin/check 2>/dev/null || echo "")
+    admin_check=$(curl -s --connect-timeout 5 --max-time 10 "${PORTAINER_WORKING_ENDPOINT}/api/users/admin/check" 2>/dev/null || echo "")
 
-    if echo "$admin_check" | jq -e . >/dev/null 2>&1; then
-        echo "Resposta de /api/users/admin/check: ${admin_check}"
+    echo "Resposta de /api/users/admin/check: ${admin_check}"
 
-        # Se retornar true, admin já existe
-        if [[ "$(echo "$admin_check" | jq -r '.')" == "true" ]]; then
-            msg_warning "Usuário admin já existe no Portainer!"
-            echo "Pulando criação da conta. Tentando obter token com credenciais existentes..."
-            local account_created=true
-        else
-            msg_success "Usuário admin ainda não foi criado. Prosseguindo com criação..."
-        fi
+    # Se retornar true, admin já existe
+    if [[ "$admin_check" == "true" ]]; then
+        msg_warning "Usuário admin já existe no Portainer!"
+        echo "Pulando criação da conta."
+        local account_created=true
     else
-        msg_warning "Não foi possível verificar status do admin. Prosseguindo com criação..."
+        msg_success "Usuário admin ainda não foi criado. Prosseguindo com criação..."
     fi
 
     # === VERIFICAÇÃO 5: VERIFICAR SE NÃO ENTROU EM TIMEOUT ===
-    echo -e "\n${NEGRITO}[Verificação 5/5]${RESET} Verificando se Portainer não entrou em timeout de segurança..."
+    echo -e "\n${NEGRITO}[Verificação 5/5]${RESET} Verificando timeout de segurança..."
     local recent_logs
-    recent_logs=$(docker service logs portainer_portainer --tail 10 2>/dev/null || echo "")
+    recent_logs=$(docker logs "$PORTAINER_CONTAINER_ID" --tail 15 --since 300s 2>&1)
 
     if echo "$recent_logs" | grep -q "timed out for security purposes"; then
-        msg_error "Portainer entrou no timeout de 5 minutos de segurança!"
-        echo "É necessário reiniciar o serviço Portainer."
-        echo "Reiniciando Portainer..."
-        docker service update --force portainer_portainer >/dev/null 2>&1
-        echo "Aguardando 30 segundos para o Portainer reiniciar..."
+        msg_error "Portainer entrou no timeout de 5 minutos!"
+        echo "Reiniciando o container..."
+        docker restart "$PORTAINER_CONTAINER_ID" >/dev/null 2>&1
+        echo "Aguardando 30 segundos..."
         sleep 30
 
-        # Re-verificar porta e HTTP após reinício
-        echo "Verificando se Portainer está acessível após reinício..."
-        local restart_retries=30
-        while ! nc -z localhost 9000 2>/dev/null && [ $restart_retries -gt 0 ]; do
-            printf "."
-            sleep 2
-            ((restart_retries--))
-        done
-        echo ""
+        # Atualizar container ID e endpoint
+        PORTAINER_CONTAINER_ID=$(docker ps --filter "name=portainer_portainer" --format "{{.ID}}" | head -n1)
+        echo "Novo container ID: ${PORTAINER_CONTAINER_ID}"
 
-        if [ $restart_retries -le 0 ]; then
+        # Re-testar endpoint
+        echo "Re-testando endpoint..."
+        if test_portainer_endpoint "$PORTAINER_WORKING_ENDPOINT" "/"; then
+            msg_success "Portainer reiniciado com sucesso!"
+        else
             msg_fatal "Portainer não ficou acessível após reinício."
         fi
-        msg_success "Portainer reiniciado e acessível."
     else
-        msg_success "Portainer não está em timeout. Prosseguindo..."
+        msg_success "Portainer não está em timeout."
     fi
 
     # === CRIAÇÃO DA CONTA ADMIN ===
     if [ "${account_created:-false}" != "true" ]; then
         echo -e "\n${NEGRITO}Iniciando criação da conta de administrador...${RESET}"
-        echo "Tentando criar conta de administrador no Portainer (máximo 20 tentativas)..."
+        echo "Usando endpoint: ${PORTAINER_WORKING_ENDPOINT}"
+        echo "Tentando criar conta (máximo 20 tentativas)..."
 
         local max_retries=20
         local account_created=false
@@ -1643,84 +1685,183 @@ main() {
         for i in $(seq 1 $max_retries); do
             echo -e "\n${NEGRITO}Tentativa ${i}/${max_retries}${RESET}"
 
-            # Curl com mais opções de debug e timeout
+            # Usar endpoint que funcionou
             local init_response
-            init_response=$(curl -v -s -k -w "\n%{http_code}" \
-                --connect-timeout 5 \
-                --max-time 10 \
-                -X POST "http://localhost:9000/api/users/admin/init" \
+            init_response=$(curl -s -w "\n%{http_code}" \
+                --connect-timeout 8 \
+                --max-time 15 \
+                -X POST "${PORTAINER_WORKING_ENDPOINT}/api/users/admin/init" \
                 -H "Content-Type: application/json" \
                 --data "{\"Username\": \"admin\", \"Password\": \"${PORTAINER_PASSWORD}\"}" \
                 2>&1)
 
-            local http_code=$(echo "$init_response" | tail -n1)
+            local http_code=$(echo "$init_response" | tail -n1 | tr -cd '0-9' | tail -c 3)
             local response_body=$(echo "$init_response" | sed '$ d')
 
             echo "Código HTTP: ${http_code}"
 
             if [[ "$http_code" == "200" ]]; then
                 msg_success "Utilizador 'admin' do Portainer criado com sucesso!"
+                echo "Resposta: ${response_body:0:100}"
                 account_created=true
                 break
             elif [[ "$http_code" == "409" ]]; then
                 msg_warning "Utilizador admin já existe (HTTP 409)."
                 account_created=true
                 break
-            elif [[ "$http_code" == "000" ]]; then
-                msg_warning "Falha na conexão (HTTP 000 - conexão recusada ou timeout)."
-                echo "Detalhes técnicos da tentativa:"
-                echo "$response_body" | grep -E "(Could not connect|Connection refused|Failed to connect|timeout)" || echo "Sem detalhes de erro específicos."
+            elif [[ "$http_code" == "000" ]] || [[ -z "$http_code" ]]; then
+                msg_warning "Falha na conexão (HTTP ${http_code:-vazio})."
 
-                # Verificar se o serviço ainda está rodando
-                echo "Verificando status do serviço..."
-                docker service ps portainer_portainer --no-trunc --format "{{.CurrentState}}" | head -n1
+                # Verificar se container ainda está rodando
+                echo "Status do container:"
+                docker inspect "$PORTAINER_CONTAINER_ID" --format 'Estado: {{.State.Status}}' 2>/dev/null || echo "Container não encontrado!"
 
-                # Verificar logs recentes
-                echo "Últimas 5 linhas do log:"
-                docker service logs portainer_portainer --tail 5 2>/dev/null || echo "Não foi possível obter logs."
+                # Re-testar endpoint
+                echo "Re-testando endpoint..."
+                if ! test_portainer_endpoint "$PORTAINER_WORKING_ENDPOINT" "/api/users/admin/check"; then
+                    msg_warning "Endpoint não está mais respondendo! Tentando encontrar novo endpoint..."
 
+                    # Tentar outros endpoints
+                    local new_endpoint_found=false
+                    for test_endpoint in "${PORTAINER_ENDPOINTS[@]}"; do
+                        if test_portainer_endpoint "$test_endpoint" "/"; then
+                            msg_success "Novo endpoint encontrado: ${test_endpoint}"
+                            PORTAINER_WORKING_ENDPOINT="$test_endpoint"
+                            new_endpoint_found=true
+                            break
+                        fi
+                    done
+
+                    if [ "$new_endpoint_found" = false ]; then
+                        msg_error "Nenhum endpoint está respondendo."
+                        break
+                    fi
+                fi
             else
                 msg_warning "Falha com código HTTP: ${http_code}"
-                echo "Resposta da API:"
-                echo "$response_body" | grep -v "^*" | grep -v "^>" | grep -v "^<" | head -n10
+                echo "Resposta: ${response_body:0:200}"
             fi
 
             if [ $i -lt $max_retries ]; then
-                echo "Aguardando 15 segundos antes da próxima tentativa..."
-                sleep 15
+                echo "Aguardando 10 segundos..."
+                sleep 10
             fi
         done
 
         if [ "$account_created" = false ]; then
             msg_error "Não foi possível criar a conta de administrador após ${max_retries} tentativas."
-            echo -e "\n${AMARELO}Informações de diagnóstico:${RESET}"
-            echo "1. Status do serviço Portainer:"
-            docker service ps portainer_portainer --no-trunc
-            echo -e "\n2. Logs completos do Portainer (últimas 50 linhas):"
-            docker service logs portainer_portainer --tail 50
-            echo -e "\n3. Portas em uso:"
-            netstat -tulpn | grep 9000 || ss -tulpn | grep 9000
+            echo -e "\n${AMARELO}=== DIAGNÓSTICO FINAL ===${RESET}"
+            echo "1. Endpoint usado: ${PORTAINER_WORKING_ENDPOINT}"
+            echo -e "\n2. Status do container:"
+            docker inspect "$PORTAINER_CONTAINER_ID" 2>/dev/null | jq '.[] | {State, NetworkSettings}' || echo "Falha no inspect"
+            echo -e "\n3. Logs completos:"
+            docker logs "$PORTAINER_CONTAINER_ID" --tail 50 2>&1
+            echo -e "\n4. Teste manual do endpoint:"
+            curl -v "${PORTAINER_WORKING_ENDPOINT}/api/users/admin/check" 2>&1 | head -n 30
             msg_fatal "Falha na criação da conta do Portainer."
         fi
     fi
 
     # --- ETAPA 3: OBTENDO CHAVE DE API ---
     msg_header "[3/5] OBTENDO CHAVE DE API DO PORTAINER"
-    echo "A autenticar para obter token JWT..."; local jwt_response; jwt_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/auth" -H "Content-Type: application/json" --data "{\"username\": \"admin\", \"password\": \"${PORTAINER_PASSWORD}\"}"); local PORTAINER_JWT=$(echo "$jwt_response" | jq -r .jwt); if [[ -z "$PORTAINER_JWT" || "$PORTAINER_JWT" == "null" ]]; then msg_fatal "Falha ao obter o token JWT."; fi; msg_success "Token JWT obtido."
-    
-    echo "Decodificando token para obter o ID do utilizador..."; local USER_ID; USER_ID=$(echo "$PORTAINER_JWT" | cut -d. -f2 | base64 --decode 2>/dev/null | jq -r .id); if [[ -z "$USER_ID" || "$USER_ID" == "null" ]]; then msg_fatal "Falha ao extrair o ID do utilizador do token JWT."; fi; msg_success "ID do utilizador 'admin' é: ${USER_ID}"
 
-    echo "A gerar chave de API..."; local apikey_response; apikey_response=$(curl -s -k -X POST "https://${PORTAINER_DOMAIN}/api/users/${USER_ID}/tokens" -H "Authorization: Bearer ${PORTAINER_JWT}" -H "Content-Type: application/json" --data "{\"description\": \"fluxer_installer_key\", \"password\": \"${PORTAINER_PASSWORD}\"}"); local PORTAINER_API_KEY=$(echo "$apikey_response" | jq -r .rawAPIKey); if [[ -z "$PORTAINER_API_KEY" || "$PORTAINER_API_KEY" == "null" ]]; then msg_error "A resposta da API para criação da chave foi: $apikey_response"; msg_fatal "Falha ao gerar a chave de API."; fi; msg_success "Chave de API gerada!"
+    # Tentar usar domínio HTTPS primeiro (passa pelo Traefik), se falhar usa endpoint que funcionou
+    echo "Determinando melhor endpoint para operações da API..."
+    local PORTAINER_API_ENDPOINT="https://${PORTAINER_DOMAIN}"
 
-    echo "Obtendo Swarm ID..."; local ENDPOINT_ID=1; local SWARM_ID; SWARM_ID=$(curl -s -k -H "X-API-Key: ${PORTAINER_API_KEY}" "https://${PORTAINER_DOMAIN}/api/endpoints/${ENDPOINT_ID}/docker/swarm" | jq -r .ID); if [[ -z "$SWARM_ID" || "$SWARM_ID" == "null" ]]; then msg_fatal "Falha ao obter o Swarm ID."; fi; msg_success "Swarm ID obtido: ${SWARM_ID}"
+    # Testar se domínio HTTPS está acessível
+    if curl -s -k --connect-timeout 5 --max-time 10 "${PORTAINER_API_ENDPOINT}/api/users/admin/check" >/dev/null 2>&1; then
+        msg_success "Domínio HTTPS está acessível via Traefik. Usando: ${PORTAINER_API_ENDPOINT}"
+    else
+        msg_warning "Domínio HTTPS não está acessível ainda. Usando endpoint direto: ${PORTAINER_WORKING_ENDPOINT}"
+        PORTAINER_API_ENDPOINT="$PORTAINER_WORKING_ENDPOINT"
+    fi
+
+    # Obter token JWT
+    echo "Autenticando para obter token JWT..."
+    local jwt_response
+    jwt_response=$(curl -s -k --connect-timeout 10 --max-time 20 \
+        -X POST "${PORTAINER_API_ENDPOINT}/api/auth" \
+        -H "Content-Type: application/json" \
+        --data "{\"username\": \"admin\", \"password\": \"${PORTAINER_PASSWORD}\"}")
+
+    local PORTAINER_JWT=$(echo "$jwt_response" | jq -r .jwt)
+
+    if [[ -z "$PORTAINER_JWT" ]] || [[ "$PORTAINER_JWT" == "null" ]]; then
+        msg_error "Falha ao obter o token JWT."
+        echo "Resposta da API: ${jwt_response}"
+        echo "Endpoint usado: ${PORTAINER_API_ENDPOINT}"
+        msg_fatal "Não foi possível autenticar no Portainer."
+    fi
+
+    msg_success "Token JWT obtido com sucesso."
+
+    # Decodificar token para obter ID do usuário
+    echo "Decodificando token para obter ID do utilizador..."
+    local USER_ID
+    USER_ID=$(echo "$PORTAINER_JWT" | cut -d. -f2 | base64 --decode 2>/dev/null | jq -r .id)
+
+    if [[ -z "$USER_ID" ]] || [[ "$USER_ID" == "null" ]]; then
+        msg_error "Falha ao extrair o ID do utilizador do token JWT."
+        echo "Token JWT: ${PORTAINER_JWT:0:50}..."
+        msg_fatal "Token JWT inválido ou mal formatado."
+    fi
+
+    msg_success "ID do utilizador 'admin': ${USER_ID}"
+
+    # Gerar chave de API
+    echo "Gerando chave de API..."
+    local apikey_response
+    apikey_response=$(curl -s -k --connect-timeout 10 --max-time 20 \
+        -X POST "${PORTAINER_API_ENDPOINT}/api/users/${USER_ID}/tokens" \
+        -H "Authorization: Bearer ${PORTAINER_JWT}" \
+        -H "Content-Type: application/json" \
+        --data "{\"description\": \"fluxer_installer_key\", \"password\": \"${PORTAINER_PASSWORD}\"}")
+
+    local PORTAINER_API_KEY=$(echo "$apikey_response" | jq -r .rawAPIKey)
+
+    if [[ -z "$PORTAINER_API_KEY" ]] || [[ "$PORTAINER_API_KEY" == "null" ]]; then
+        msg_error "Falha ao gerar a chave de API."
+        echo "Resposta da API: ${apikey_response}"
+        msg_fatal "Não foi possível gerar chave de API."
+    fi
+
+    msg_success "Chave de API gerada com sucesso!"
+
+    # Obter Swarm ID
+    echo "Obtendo Swarm ID..."
+    local ENDPOINT_ID=1
+    local SWARM_ID
+    SWARM_ID=$(curl -s -k --connect-timeout 10 --max-time 20 \
+        -H "X-API-Key: ${PORTAINER_API_KEY}" \
+        "${PORTAINER_API_ENDPOINT}/api/endpoints/${ENDPOINT_ID}/docker/swarm" | jq -r .ID)
+
+    if [[ -z "$SWARM_ID" ]] || [[ "$SWARM_ID" == "null" ]]; then
+        msg_error "Falha ao obter o Swarm ID."
+        echo "Endpoint usado: ${PORTAINER_API_ENDPOINT}"
+        echo "Tentando listar endpoints disponíveis:"
+        curl -s -k -H "X-API-Key: ${PORTAINER_API_KEY}" "${PORTAINER_API_ENDPOINT}/api/endpoints" | jq '.'
+        msg_fatal "Não foi possível obter Swarm ID."
+    fi
+
+    msg_success "Swarm ID obtido: ${SWARM_ID}"
+
+    # Salvar endpoint para uso nas próximas etapas
+    echo "Endpoint da API para deploy de stacks: ${PORTAINER_API_ENDPOINT}"
+
+    # Extrair apenas o domínio/IP (sem protocolo) para função deploy_stack_via_api
+    local PORTAINER_API_HOST
+    PORTAINER_API_HOST=$(echo "$PORTAINER_API_ENDPOINT" | sed -e 's|^https\?://||')
+
+    echo "Host da API: ${PORTAINER_API_HOST}"
 
     # --- ETAPA 4: IMPLANTAR STACKS DE INFRAESTRUTURA E CRIAR DBS ---
     msg_header "[4/5] IMPLANTANDO INFRAESTRUTURA E CRIANDO BANCOS DE DADOS"
-    
-    deploy_stack_via_api "redis" "$(generate_redis_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
+
+    deploy_stack_via_api "redis" "$(generate_redis_yml)" "$PORTAINER_API_KEY" "$PORTAINER_API_HOST" "$SWARM_ID"
     # Re-implanta o stack postgres AQUI, após a remoção explícita do stack e do volume
-    deploy_stack_via_api "postgres" "$(generate_postgres_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
-    deploy_stack_via_api "minio" "$(generate_minio_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
+    deploy_stack_via_api "postgres" "$(generate_postgres_yml)" "$PORTAINER_API_KEY" "$PORTAINER_API_HOST" "$SWARM_ID"
+    deploy_stack_via_api "minio" "$(generate_minio_yml)" "$PORTAINER_API_KEY" "$PORTAINER_API_HOST" "$SWARM_ID"
     
     wait_stack "postgres" "postgres"
     wait_stack "minio" "minio"
@@ -1739,7 +1880,7 @@ main() {
 
     # Estratégia: Implantar apenas o n8n_editor para rodar as migrations primeiro
     msg_header "IMPLANTANDO N8N EDITOR PARA MIGRATIONS"
-    deploy_stack_via_api "n8n-migrations" "$(generate_n8n_editor_only_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
+    deploy_stack_via_api "n8n-migrations" "$(generate_n8n_editor_only_yml)" "$PORTAINER_API_KEY" "$PORTAINER_API_HOST" "$SWARM_ID"
     wait_stack "n8n-migrations" "n8n_editor" # Espera o editor estar online
     echo "N8n editor online. Aguardando 90 segundos para as migrations completarem..."
     sleep 90 # Tempo para as migrations rodarem
@@ -1749,9 +1890,9 @@ main() {
     sleep 10 # Aguarda a remoção do stack temporário
 
     # Agora, e somente agora, subimos os stacks de aplicação completos
-    deploy_stack_via_api "n8n" "$(generate_n8n_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
-    deploy_stack_via_api "typebot" "$(generate_typebot_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
-    deploy_stack_via_api "evolution" "$(generate_evolution_yml)" "$PORTAINER_API_KEY" "$PORTAINER_DOMAIN" "$SWARM_ID"
+    deploy_stack_via_api "n8n" "$(generate_n8n_yml)" "$PORTAINER_API_KEY" "$PORTAINER_API_HOST" "$SWARM_ID"
+    deploy_stack_via_api "typebot" "$(generate_typebot_yml)" "$PORTAINER_API_KEY" "$PORTAINER_API_HOST" "$SWARM_ID"
+    deploy_stack_via_api "evolution" "$(generate_evolution_yml)" "$PORTAINER_API_KEY" "$PORTAINER_API_HOST" "$SWARM_ID"
 
 
     # --- RESUMO FINAL ---

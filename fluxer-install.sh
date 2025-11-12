@@ -1087,6 +1087,39 @@ networks:
 EOL
 }
 
+# === FUNÇÕES DE CACHE ===
+CACHE_FILE="/root/.fluxer-install-cache"
+
+save_cache() {
+    msg_header "SALVANDO CONFIGURAÇÕES EM CACHE"
+    cat > "$CACHE_FILE" << EOF
+# Cache de configuração Fluxer - $(date)
+DOMINIO_RAIZ="${DOMINIO_RAIZ}"
+LE_EMAIL="${LE_EMAIL}"
+PORTAINER_PASSWORD="${PORTAINER_PASSWORD}"
+MINIO_ROOT_USER="${MINIO_ROOT_USER}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD}"
+SMTP_USER="${SMTP_USER}"
+SMTP_PASS="${SMTP_PASS}"
+EOF
+    chmod 600 "$CACHE_FILE"
+    msg_success "Configurações salvas em cache."
+}
+
+load_cache() {
+    if [ -f "$CACHE_FILE" ]; then
+        source "$CACHE_FILE"
+        return 0
+    fi
+    return 1
+}
+
+clear_cache() {
+    if [ -f "$CACHE_FILE" ]; then
+        rm -f "$CACHE_FILE"
+        msg_success "Cache limpo."
+    fi
+}
 
 # Nova função para criar os bancos de dados
 create_databases() {
@@ -1170,6 +1203,13 @@ setup_minio_buckets() {
 
 # === FUNÇÃO PRINCIPAL ===
 main() {
+    # Verificar se usuário quer limpar cache manualmente
+    if [[ "$1" == "--clear-cache" ]]; then
+        clear_cache
+        echo "Use 'bash fluxer-install.sh' para executar o instalador."
+        exit 0
+    fi
+
     clear
     # --- BANNER ---
     echo -e "${AZUL}${NEGRITO}"
@@ -1199,20 +1239,43 @@ main() {
     echo ""
     read -p "Após configurar o DNS na Cloudflare, pressione [Enter] para continuar..." < /dev/tty
 
+    # --- VERIFICAR CACHE EXISTENTE ---
+    local use_cache=false
+    if load_cache; then
+        msg_header "CONFIGURAÇÃO ANTERIOR ENCONTRADA"
+        echo -e "${VERDE}Encontramos configurações de uma instalação anterior:${RESET}"
+        echo "  🌐 Domínio: ${DOMINIO_RAIZ}"
+        echo "  📧 Email: ${LE_EMAIL}"
+        echo "  👤 Usuário MinIO: ${MINIO_ROOT_USER}"
+        echo "  📧 SMTP: ${SMTP_USER}"
+        echo ""
+        read -p "Deseja usar essas configurações? (s/N): " use_cache_response < /dev/tty
+        if [[ "$use_cache_response" =~ ^[Ss]$ ]]; then
+            use_cache=true
+            msg_success "Usando configurações salvas do cache."
+        else
+            msg_warning "Cache ignorado. Você precisará inserir as informações novamente."
+            use_cache=false
+        fi
+    fi
 
     # --- COLETA DE DADOS DO USUÁRIO COM VALIDAÇÃO ---
-    msg_header "COLETANDO INFORMAÇÕES"
-    while true; do read -p "🌐 Qual é o seu domínio principal (ex: seudominio.com.br): " DOMINIO_RAIZ < /dev/tty; if validate_domain "$DOMINIO_RAIZ"; then break; fi; done
+    if [ "$use_cache" = false ]; then
+        msg_header "COLETANDO INFORMAÇÕES"
+        while true; do read -p "🌐 Qual é o seu domínio principal (ex: seudominio.com.br): " DOMINIO_RAIZ < /dev/tty; if validate_domain "$DOMINIO_RAIZ"; then break; fi; done
     while true; do read -p "📧 Email para o certificado SSL (Let's Encrypt): " LE_EMAIL < /dev/tty; if validate_email "$LE_EMAIL"; then break; fi; done
     while true; do echo -e "${AMARELO}--> A senha deve ter no mínimo 12 caracteres, com maiúsculas, minúsculas, números e especiais.${RESET}"; read -s -p "🔑 Digite uma senha para o Portainer: " PORTAINER_PASSWORD < /dev/tty; echo; if validate_password "$PORTAINER_PASSWORD"; then read -s -p "🔑 Confirme a senha do Portainer: " PORTAINER_PASSWORD_CONFIRM < /dev/tty; echo; if [[ "$PORTAINER_PASSWORD" == "$PORTAINER_PASSWORD_CONFIRM" ]]; then break; else msg_warning "As senhas não coincidem."; fi; fi; done
     while true; do read -p "👤 Utilizador root para o MinIO (sem espaços ou especiais): " MINIO_ROOT_USER < /dev/tty; if validate_simple_text "$MINIO_ROOT_USER"; then break; fi; done
     while true; do echo -e "${AMARELO}--> A senha do MinIO precisa ter no mínimo 8 caracteres.${RESET}"; read -s -p "🔑 Digite uma senha para o MinIO: " MINIO_ROOT_PASSWORD < /dev/tty; echo; if [ ${#MINIO_ROOT_PASSWORD} -ge 8 ]; then read -s -p "🔑 Confirme a senha do MinIO: " MINIO_ROOT_PASSWORD_CONFIRM < /dev/tty; echo; if [[ "$MINIO_ROOT_PASSWORD" == "$MINIO_ROOT_PASSWORD_CONFIRM" ]]; then break; else msg_warning "As senhas não coincidem."; fi; else msg_warning "A senha do MinIO precisa ter no mínimo 8 caracteres."; fi; done
     
-    msg_header "COLETANDO INFORMAÇÕES DE SMTP (para n8n e Typebot)"
-    echo -e "${AZUL}As configurações de SMTP do Gmail serão usadas por padrão.${RESET}"
-    while true; do read -p "📧 Utilizador SMTP (seu e-mail do Gmail): " SMTP_USER < /dev/tty; if validate_email "$SMTP_USER"; then break; fi; done
-    read -s -p "🔑 Senha SMTP (use uma 'Senha de App' gerada no Google): " SMTP_PASS < /dev/tty; echo
-    
+        msg_header "COLETANDO INFORMAÇÕES DE SMTP (para n8n e Typebot)"
+        echo -e "${AZUL}As configurações de SMTP do Gmail serão usadas por padrão.${RESET}"
+        while true; do read -p "📧 Utilizador SMTP (seu e-mail do Gmail): " SMTP_USER < /dev/tty; if validate_email "$SMTP_USER"; then break; fi; done
+        read -s -p "🔑 Senha SMTP (use uma 'Senha de App' gerada no Google): " SMTP_PASS < /dev/tty; echo
+
+        # Salvar configurações no cache
+        save_cache
+    fi
 
     # --- GERAÇÃO DE VARIÁVEIS E VERIFICAÇÃO DE DNS ---
     msg_header "GERANDO CONFIGURAÇÕES E VERIFICANDO DNS"
@@ -1303,12 +1366,12 @@ main() {
     wait_stack "traefik" "traefik"
     wait_stack "portainer" "portainer"
 
-    echo "Aguardando 90 segundos para estabilização dos serviços e geração de certificados SSL..."; sleep 90
+    echo "Aguardando 30 segundos para estabilização inicial..."; sleep 30
 
-    echo "Tentando criar conta de administrador no Portainer..."; local max_retries=20; local account_created=false
+    echo "Tentando criar conta de administrador no Portainer (timeout 5min)..."; local max_retries=30; local account_created=false
     for i in $(seq 1 $max_retries); do
-        local init_response; init_response=$(curl -s -k -w "\n%{http_code}" -X POST "http://localhost:9000/api/users/admin/init" -H "Content-Type: application/json" --data "{\"Username\": \"admin\", \"Password\": \"${PORTAINER_PASSWORD}\"}"); local http_code=$(tail -n1 <<< "$init_response"); local response_body=$(sed '$ d' <<< "$init_response")
-        if [[ "$http_code" == "200" ]]; then msg_success "Utilizador 'admin' do Portainer criado!"; account_created=true; break; else msg_warning "Tentativa ${i}/${max_retries} falhou."; echo "Código HTTP: ${http_code}"; echo "Resposta: ${response_body}"; echo "Aguardando 20s..."; sleep 20; fi
+        local init_response; init_response=$(curl -s -k -w "\n%{http_code}" --max-time 5 -X POST "http://localhost:9000/api/users/admin/init" -H "Content-Type: application/json" --data "{\"Username\": \"admin\", \"Password\": \"${PORTAINER_PASSWORD}\"}"); local http_code=$(tail -n1 <<< "$init_response"); local response_body=$(sed '$ d' <<< "$init_response")
+        if [[ "$http_code" == "200" ]]; then msg_success "Utilizador 'admin' do Portainer criado!"; account_created=true; break; else msg_warning "Tentativa ${i}/${max_retries} falhou."; echo "Código HTTP: ${http_code}"; echo "Resposta: ${response_body}"; echo "Aguardando 10s..."; sleep 10; fi
     done
     if [ "$account_created" = false ]; then msg_fatal "Não foi possível criar a conta de administrador no Portainer."; fi
 
@@ -1381,7 +1444,10 @@ main() {
         echo -e "${NEGRITO}Senha do Postgres:       ${POSTGRES_PASSWORD}${RESET}"
     fi
     echo; msg_success "Tudo pronto! Aproveite o seu novo ambiente de automação."
+
+    # Limpar cache após instalação bem-sucedida
+    clear_cache
 }
 
 # --- PONTO DE ENTRADA DO SCRIPT ---
-main
+main "$@"

@@ -52,13 +52,13 @@ prepare_system() {
     fi
     msg_success "Executando com permissões de root."
 
-    echo -e "\n${NEGRITO}1/14 - [ OK ] - Fazendo Update...${RESET}"
+    echo -e "\n${NEGRITO}1/15 - [ OK ] - Fazendo Update...${RESET}"
     apt-get update -qq || msg_warning "Falha no apt-get update."
 
-    echo -e "${NEGRITO}2/14 - [ OK ] - Fazendo Upgrade...${RESET}"
+    echo -e "${NEGRITO}2/15 - [ OK ] - Fazendo Upgrade...${RESET}"
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq || msg_warning "Falha no apt-get upgrade."
     
-    local packages_to_install="sudo apt-utils dialog jq apache2-utils git python3 gettext-base dnsutils"
+    local packages_to_install="sudo apt-utils dialog jq apache2-utils git python3 gettext-base dnsutils netcat-openbsd"
     local step=3
     for pkg in $packages_to_install; do
         echo -e "${NEGRITO}${step}/14 - [ OK ] - Verificando/Instalando ${pkg}...${RESET}"
@@ -66,18 +66,18 @@ prepare_system() {
         step=$((step + 1))
     done
 
-    echo -e "${NEGRITO}11/14 - [ OK ] - Configurando Timezone...${RESET}"
+    echo -e "${NEGRITO}12/15 - [ OK ] - Configurando Timezone...${RESET}"
     timedatectl set-timezone America/Sao_Paulo
 
     local server_name="fluxer-vps"
-    echo -e "${NEGRITO}12/14 - [ OK ] - Configurando Hostname para '${server_name}'...${RESET}"
+    echo -e "${NEGRITO}13/15 - [ OK ] - Configurando Hostname para '${server_name}'...${RESET}"
     hostnamectl set-hostname "$server_name"
     sed -i "s/127.0.0.1[[:space:]]localhost/127.0.0.1 ${server_name}/g" /etc/hosts > /dev/null 2>&1
 
-    echo -e "${NEGRITO}13/14 - [ OK ] - Fazendo Update final...${RESET}"
+    echo -e "${NEGRITO}14/15 - [ OK ] - Fazendo Update final...${RESET}"
     apt-get update -qq
-    
-    echo -e "${NEGRITO}14/14 - [ OK ] - Instalando AppArmor...${RESET}"
+
+    echo -e "${NEGRITO}15/15 - [ OK ] - Instalando AppArmor...${RESET}"
     apt-get install -y apparmor-utils -qq
 
     msg_success "Sistema preparado e todas as dependências instaladas."

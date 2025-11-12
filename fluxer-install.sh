@@ -1376,6 +1376,27 @@ main() {
     echo "Aguardando 5 segundos para estabilização inicial..."
     sleep 5
 
+    # Verificar se o Portainer já iniciou o servidor HTTP nos logs
+    echo "Verificando se Portainer já iniciou o servidor HTTP..."
+    local http_started=false
+    for check in {1..20}; do
+        if docker service logs portainer_portainer --tail 20 2>/dev/null | grep -q "starting HTTP server"; then
+            msg_success "Portainer iniciou o servidor HTTP."
+            http_started=true
+            break
+        fi
+        printf "."
+        sleep 2
+    done
+    echo ""
+
+    if [ "$http_started" = true ]; then
+        echo "Aguardando 10 segundos adicionais para API estar pronta..."
+        sleep 10
+    else
+        msg_warning "Não foi possível confirmar início do HTTP server nos logs. Prosseguindo..."
+    fi
+
     # === VERIFICAÇÃO 1: PORTA TCP ABERTA ===
     echo -e "\n${NEGRITO}[Verificação 1/5]${RESET} Aguardando porta 9000 aceitar conexões TCP..."
     local port_retries=60
@@ -1398,17 +1419,37 @@ main() {
     echo -e "\n${NEGRITO}[Verificação 2/5]${RESET} Verificando se o servidor HTTP está respondendo..."
     local http_retries=30
     local http_works=false
-    while [ $http_retries -gt 0 ]; do
-        local test_response
-        test_response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 --max-time 5 http://localhost:9000/ 2>/dev/null || echo "000")
+    local attempt_count=0
 
-        if [[ "$test_response" != "000" ]]; then
+    while [ $http_retries -gt 0 ]; do
+        ((attempt_count++))
+
+        # Executar curl e capturar código HTTP de forma confiável
+        local test_response
+        test_response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 --max-time 5 http://localhost:9000/ 2>/dev/null)
+
+        # Garantir que temos exatamente 3 dígitos, removendo tudo que não é dígito e pegando últimos 3 caracteres
+        test_response=$(echo "$test_response" | tr -cd '0-9' | tail -c 3)
+
+        # Debug: mostrar o que foi capturado a cada 10 tentativas
+        if [ $((attempt_count % 10)) -eq 0 ]; then
+            echo -e "\n  [Debug] Tentativa ${attempt_count}/30 - Código HTTP capturado: '${test_response}'"
+        fi
+
+        # Verificar se é um código HTTP válido (200-599)
+        if [[ "$test_response" =~ ^[2-5][0-9][0-9]$ ]]; then
             msg_success "Servidor HTTP do Portainer está respondendo (HTTP ${test_response})."
             http_works=true
             break
         fi
 
-        printf "."
+        # Log a cada 5 tentativas
+        if [ $((attempt_count % 5)) -eq 0 ] && [ $((attempt_count % 10)) -ne 0 ]; then
+            echo -e "\n  Tentativa ${attempt_count}/30 - aguardando resposta HTTP válida..."
+        else
+            printf "."
+        fi
+
         sleep 2
         ((http_retries--))
     done
@@ -1416,49 +1457,81 @@ main() {
 
     if [ "$http_works" = false ]; then
         msg_error "Servidor HTTP não está respondendo após 60 segundos."
+        echo "Última resposta capturada: '${test_response}'"
         echo "Verificando logs do Portainer..."
         docker service logs portainer_portainer --tail 30
         msg_fatal "Portainer HTTP não está funcional."
     fi
 
-    # === VERIFICAÇÃO 3: API STATUS ENDPOINT ===
+    # === VERIFICAÇÃO 3: API RESPONDENDO ===
     echo -e "\n${NEGRITO}[Verificação 3/5]${RESET} Verificando se a API está inicializada..."
-    local api_retries=30
+    echo "Isso pode levar até 2 minutos..."
+    local api_retries=60  # 2 minutos total
     local api_ready=false
-    while [ $api_retries -gt 0 ]; do
-        local status_response
-        status_response=$(curl -s --connect-timeout 3 --max-time 5 http://localhost:9000/api/status 2>/dev/null || echo "")
+    local api_attempt=0
 
-        # Se recebeu qualquer resposta JSON válida, a API está pronta
-        if echo "$status_response" | jq -e . >/dev/null 2>&1; then
-            msg_success "API do Portainer está inicializada e respondendo."
-            echo "Resposta da API: ${status_response}"
+    while [ $api_retries -gt 0 ]; do
+        ((api_attempt++))
+
+        # Testar diretamente o endpoint que vamos usar
+        local check_response
+        check_response=$(curl -s --connect-timeout 3 --max-time 5 http://localhost:9000/api/users/admin/check 2>/dev/null)
+
+        # Debug a cada 10 tentativas
+        if [ $((api_attempt % 10)) -eq 0 ]; then
+            echo -e "\n  [Debug] Tentativa ${api_attempt}/60"
+            echo "  Resposta de /api/users/admin/check: '${check_response}'"
+
+            # Mostrar logs recentes
+            echo "  Últimas 3 linhas do log:"
+            docker service logs portainer_portainer --tail 3 2>/dev/null | sed 's/^/    /'
+        fi
+
+        # Verifica se recebeu uma resposta válida (true ou false)
+        if [[ "$check_response" == "true" ]] || [[ "$check_response" == "false" ]]; then
+            msg_success "API do Portainer está respondendo!"
+            echo "Endpoint /api/users/admin/check retornou: ${check_response}"
             api_ready=true
             break
         fi
 
-        printf "."
+        # Também aceitar respostas JSON válidas de qualquer endpoint
+        if echo "$check_response" | jq -e . >/dev/null 2>&1; then
+            msg_success "API do Portainer está respondendo com JSON válido!"
+            echo "Resposta: ${check_response}"
+            api_ready=true
+            break
+        fi
+
+        # A cada 5 tentativas (mas não nas de 10), mostrar progresso simples
+        if [ $((api_attempt % 5)) -eq 0 ] && [ $((api_attempt % 10)) -ne 0 ]; then
+            echo -e "\n  Tentativa ${api_attempt}/60 - aguardando API..."
+        else
+            printf "."
+        fi
+
         sleep 2
         ((api_retries--))
     done
     echo ""
 
     if [ "$api_ready" = false ]; then
-        msg_warning "Endpoint /api/status não respondeu. Tentando endpoint alternativo..."
+        msg_error "API não respondeu após 120 segundos (2 minutos) de tentativas."
+        echo -e "\n${AMARELO}Informações de diagnóstico completas:${RESET}"
 
-        # Tenta /api/users/admin/check como alternativa
-        local check_response
-        check_response=$(curl -s --connect-timeout 3 --max-time 5 http://localhost:9000/api/users/admin/check 2>/dev/null || echo "")
+        echo -e "\n1. Testando conectividade HTTP direta:"
+        curl -v http://localhost:9000/ 2>&1 | head -n 25
 
-        if [[ -n "$check_response" ]]; then
-            msg_success "API está respondendo via endpoint /api/users/admin/check"
-            api_ready=true
-        else
-            msg_error "Nenhum endpoint da API está respondendo."
-            echo "Verificando logs do Portainer..."
-            docker service logs portainer_portainer --tail 40
-            msg_fatal "API do Portainer não está funcional."
-        fi
+        echo -e "\n2. Testando endpoint /api/status:"
+        curl -v http://localhost:9000/api/status 2>&1 | head -n 25
+
+        echo -e "\n3. Logs completos do Portainer (últimas 50 linhas):"
+        docker service logs portainer_portainer --tail 50
+
+        echo -e "\n4. Status do container:"
+        docker service ps portainer_portainer --no-trunc
+
+        msg_fatal "API do Portainer não está funcional."
     fi
 
     # === VERIFICAÇÃO 4: CHECAR SE ADMIN JÁ EXISTE ===

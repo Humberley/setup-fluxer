@@ -194,73 +194,130 @@ deploy_stack_via_api() {
 # === FUNÇÕES DE GERAÇÃO DE YAML ===
 
 generate_traefik_yml() {
-cat << EOL
+cat << 'EOL'
 version: "3.7"
 services:
   traefik:
-    image: traefik:v3.0
+    image: traefik:v2.11.2
     command:
       - "--api.dashboard=true"
-      - "--providers.swarm=true"
+      - "--providers.docker.swarmMode=true"
       - "--providers.docker.endpoint=unix:///var/run/docker.sock"
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=${REDE_DOCKER}"
       - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
       - "--entrypoints.websecure.address=:443"
-      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
-      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
-      - "--certificatesresolvers.letsencryptresolver.acme.email=${LE_EMAIL}"
-      - "--certificatesresolvers.letsencryptresolver.acme.storage=/etc/traefik/letsencrypt/acme.json"
+      - "--entrypoints.web.transport.respondingTimeouts.idleTimeout=3600"
       - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge=true"
       - "--certificatesresolvers.letsencryptresolver.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencryptresolver.acme.storage=/etc/traefik/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencryptresolver.acme.email=${LE_EMAIL}"
       - "--log.level=DEBUG"
+      - "--log.format=common"
       - "--log.filePath=/var/log/traefik/traefik.log"
       - "--accesslog=true"
-      - "--accesslog.filepath=/var/log/traefik/access.log"
-    ports: [ "80:80", "443:443" ]
-    volumes: [ "volume_swarm_certificates:/etc/traefik/letsencrypt", "/var/run/docker.sock:/var/run/docker.sock:ro", "volume_swarm_shared:/var/log/traefik" ]
-    networks: [ ${REDE_DOCKER} ]
+      - "--accesslog.filepath=/var/log/traefik/access-log"
+
+    volumes:
+      - "vol_certificates:/etc/traefik/letsencrypt"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "vol_shared:/var/log/traefik"
+
+    networks:
+      - ${REDE_DOCKER}
+
+    ports:
+      - target: 80
+        published: 80
+        mode: host
+      - target: 443
+        published: 443
+        mode: host
+
     deploy:
       placement:
-        constraints: [ "node.role == manager" ]
+        constraints:
+          - node.role == manager
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.middlewares.redirect-https.redirectscheme.scheme=https"
+        - "traefik.http.middlewares.redirect-https.redirectscheme.permanent=true"
+        - "traefik.http.routers.http-catchall.rule=Host(\`{host:.+}\`)"
+        - "traefik.http.routers.http-catchall.entrypoints=web"
+        - "traefik.http.routers.http-catchall.middlewares=redirect-https@docker"
+        - "traefik.http.routers.http-catchall.priority=1"
+
+volumes:
+  vol_shared:
+    external: true
+    name: volume_swarm_shared
+  vol_certificates:
+    external: true
+    name: volume_swarm_certificates
+
 networks:
   ${REDE_DOCKER}:
     external: true
-volumes:
-  volume_swarm_certificates:
-    external: true
-  volume_swarm_shared:
-    external: true
+    attachable: true
+    name: ${REDE_DOCKER}
 EOL
 }
 
 generate_portainer_yml() {
-cat << EOL
+cat << 'EOL'
 version: "3.7"
 services:
+
   agent:
     image: portainer/agent:latest
-    volumes: [ "/var/run/docker.sock:/var/run/docker.sock", "/var/lib/docker/volumes:/var/lib/docker/volumes" ]
-    networks: [ ${REDE_DOCKER} ]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+    networks:
+      - ${REDE_DOCKER}
     deploy:
       mode: global
-      placement: { constraints: [node.platform.os == linux] }
+      placement:
+        constraints: [node.platform.os == linux]
+
   portainer:
     image: portainer/portainer-ce:latest
     command: -H tcp://tasks.agent:9001 --tlsskipverify
-    volumes: [ "portainer_data:/data" ]
-    networks: [ ${REDE_DOCKER} ]
+    volumes:
+      - ${PORTAINER_VOLUME}:/data
+    networks:
+      - ${REDE_DOCKER}
+    ports:
+      - "9000:9000"
+      - "9443:9443"
     deploy:
       mode: replicated
       replicas: 1
-      placement: { constraints: [node.role == manager] }
-      labels: [ "traefik.enable=true", "traefik.http.routers.portainer.rule=Host(\`${PORTAINER_DOMAIN}\`)", "traefik.http.routers.portainer.entrypoints=websecure", "traefik.http.routers.portainer.tls.certresolver=letsencryptresolver", "traefik.http.services.portainer.loadbalancer.server.port=9000", "traefik.docker.network=${REDE_DOCKER}" ]
+      placement:
+        constraints: [node.role == manager]
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.portainer.rule=Host(\`${PORTAINER_DOMAIN}\`)"
+        - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+        - "traefik.http.routers.portainer.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.portainer.service=portainer"
+        - "traefik.docker.network=${REDE_DOCKER}"
+        - "traefik.http.routers.portainer.entrypoints=websecure"
+        - "traefik.http.routers.portainer.priority=1"
+
 volumes:
-  portainer_data:
+  ${PORTAINER_VOLUME}:
     external: true
+    name: ${PORTAINER_VOLUME}
+
 networks:
   ${REDE_DOCKER}:
     external: true
+    attachable: true
+    name: ${REDE_DOCKER}
 EOL
 }
 
@@ -1085,6 +1142,31 @@ create_databases() {
     msg_success "Bancos de dados redefinidos com sucesso."
 }
 
+# Função para configurar buckets do MinIO
+setup_minio_buckets() {
+    msg_header "CONFIGURANDO BUCKETS NO MINIO"
+
+    echo "Aguardando MinIO estar totalmente pronto..."
+    sleep 15
+
+    echo "Criando alias para MinIO e buckets necessários..."
+
+    # Usar docker run para executar comandos mc (MinIO Client)
+    docker run --rm --network="${REDE_DOCKER}" \
+        --entrypoint=/bin/sh \
+        minio/mc:latest \
+        -c "
+        mc alias set myminio https://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} --insecure && \
+        mc mb myminio/typebot --ignore-existing --insecure && \
+        mc mb myminio/evolution --ignore-existing --insecure && \
+        mc anonymous set download myminio/typebot --insecure && \
+        mc anonymous set download myminio/evolution --insecure && \
+        echo 'Buckets criados com sucesso!'
+        " || msg_error "Aviso: Falha ao configurar buckets MinIO. Configure manualmente depois."
+
+    msg_success "Configuração do MinIO concluída."
+}
+
 
 # === FUNÇÃO PRINCIPAL ===
 main() {
@@ -1138,7 +1220,11 @@ main() {
     export SMTP_HOST="smtp.gmail.com"
     export SMTP_PORT="587"
     export SMTP_SSL="true"
-    
+
+    # Variáveis SMTP para n8n e Typebot
+    export N8N_SMTP_USER="${SMTP_USER}"
+    export N8N_SMTP_PASS="${SMTP_PASS}"
+
     export PORTAINER_DOMAIN="portainer.${DOMINIO_RAIZ}"
     export N8N_EDITOR_DOMAIN="n8n.${DOMINIO_RAIZ}"
     export N8N_WEBHOOK_DOMAIN="nwn.${DOMINIO_RAIZ}"
@@ -1152,10 +1238,20 @@ main() {
     export N8N_ENCRYPTION_KEY=$(openssl rand -hex 16)
     export TYPEBOT_ENCRYPTION_KEY=$(openssl rand -hex 16)
     export EVOLUTION_API_KEY=$(openssl rand -hex 16)
-    
+
+    # Credenciais S3/MinIO geradas automaticamente
+    export S3_ACCESS_KEY=$(openssl rand -hex 16)
+    export S3_SECRET_KEY=$(openssl rand -hex 32)
+    export S3_ENABLED="true"
+    export S3_ENDPOINT="${MINIO_S3_DOMAIN}"
+
+    # Redis URI
+    export REDIS_URI="redis://redis:6379"
+
     export REDE_DOCKER="fluxerNet"
-    
+
     export POSTGRES_VOLUME="postgres_data"
+    export PORTAINER_VOLUME="portainer_data"
     export REDIS_VOLUME="redis_data"
     export MINIO_VOLUME="minio_data"
     export EVOLUTION_VOLUME="evolution_instances"
@@ -1206,13 +1302,13 @@ main() {
     msg_header "[2/5] VERIFICANDO SERVIÇOS E CONFIGURANDO PORTAINER"
     wait_stack "traefik" "traefik"
     wait_stack "portainer" "portainer"
-    
-    echo "Aguardando 30 segundos para estabilização dos serviços..."; sleep 30
 
-    echo "Tentando criar conta de administrador no Portainer..."; local max_retries=10; local account_created=false
+    echo "Aguardando 90 segundos para estabilização dos serviços e geração de certificados SSL..."; sleep 90
+
+    echo "Tentando criar conta de administrador no Portainer..."; local max_retries=20; local account_created=false
     for i in $(seq 1 $max_retries); do
-        local init_response; init_response=$(curl -s -k -w "\n%{http_code}" -X POST "https://${PORTAINER_DOMAIN}/api/users/admin/init" -H "Content-Type: application/json" --data "{\"Username\": \"admin\", \"Password\": \"${PORTAINER_PASSWORD}\"}"); local http_code=$(tail -n1 <<< "$init_response"); local response_body=$(sed '$ d' <<< "$init_response")
-        if [[ "$http_code" == "200" ]]; then msg_success "Utilizador 'admin' do Portainer criado!"; account_created=true; break; else msg_warning "Tentativa ${i}/${max_retries} falhou."; echo "Código HTTP: ${http_code}"; echo "Resposta: ${response_body}"; echo "Aguardando 15s..."; sleep 15; fi
+        local init_response; init_response=$(curl -s -k -w "\n%{http_code}" -X POST "http://localhost:9000/api/users/admin/init" -H "Content-Type: application/json" --data "{\"Username\": \"admin\", \"Password\": \"${PORTAINER_PASSWORD}\"}"); local http_code=$(tail -n1 <<< "$init_response"); local response_body=$(sed '$ d' <<< "$init_response")
+        if [[ "$http_code" == "200" ]]; then msg_success "Utilizador 'admin' do Portainer criado!"; account_created=true; break; else msg_warning "Tentativa ${i}/${max_retries} falhou."; echo "Código HTTP: ${http_code}"; echo "Resposta: ${response_body}"; echo "Aguardando 20s..."; sleep 20; fi
     done
     if [ "$account_created" = false ]; then msg_fatal "Não foi possível criar a conta de administrador no Portainer."; fi
 
@@ -1240,6 +1336,8 @@ main() {
     create_databases
     echo "Aguardando 15 segundos para o PostgreSQL processar a criação dos bancos de dados..."
     sleep 15 # Adicionado um atraso para dar tempo ao PostgreSQL de se estabilizar
+
+    setup_minio_buckets
 
     # --- ETAPA 5: IMPLANTAR STACKS DE APLICAÇÃO ---
     msg_header "[5/5] IMPLANTANDO STACKS DE APLICAÇÃO"

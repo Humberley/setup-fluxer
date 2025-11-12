@@ -1325,30 +1325,37 @@ main() {
 
     # --- PREPARAÇÃO DO AMBIENTE SWARM ---
     msg_header "PREPARANDO O AMBIENTE SWARM"
-    echo "Garantindo a existência da rede Docker overlay '${REDE_DOCKER}'..."; docker network rm "$REDE_DOCKER" >/dev/null 2>&1; docker network create --driver=overlay --attachable "$REDE_DOCKER" || msg_fatal "Falha ao criar a rede overlay '${REDE_DOCKER}'."; msg_success "Rede '${REDE_DOCKER}' pronta."
-    echo "Criando os volumes Docker...";
-    
-    # Remover o stack do Postgres e o volume para garantir um ambiente limpo
-    echo "Removendo stacks antigos de aplicação (n8n, typebot, evolution) para garantir ambiente limpo..."
-    docker stack rm n8n >/dev/null 2>&1
-    docker stack rm typebot >/dev/null 2>&1
-    docker stack rm evolution >/dev/null 2>&1
-    sleep 15 # Aumenta a pausa para o swarm processar a remoção de todos os stacks de aplicação
-    
-    echo "Removendo stack 'postgres' e volume '${POSTGRES_VOLUME}' para garantir ambiente limpo...";
-    docker stack rm postgres >/dev/null 2>&1 # Remover o stack postgres
-    sleep 10 # Aumenta a pausa para o swarm processar a remoção do stack
-    docker volume rm "${POSTGRES_VOLUME}" >/dev/null 2>&1
-    sleep 5 # Aumenta a pausa para o sistema de arquivos liberar o volume
 
-    docker volume create "portainer_data" >/dev/null
-    docker volume create "volume_swarm_certificates" >/dev/null
-    docker volume create "volume_swarm_shared" >/dev/null
-    docker volume create "${POSTGRES_VOLUME}" >/dev/null # Recria o volume
-    docker volume create "${REDIS_VOLUME}" >/dev/null
-    docker volume create "${MINIO_VOLUME}" >/dev/null
-    docker volume create "${EVOLUTION_VOLUME}" >/dev/null
-    msg_success "Volumes prontos."
+    # Remover todos os stacks ANTES de mexer na rede
+    echo "Removendo stacks antigos (se existirem)..."
+    docker stack rm traefik portainer redis postgres minio n8n typebot evolution >/dev/null 2>&1
+    echo "Aguardando 30 segundos para stacks serem removidos completamente..."
+    sleep 30
+
+    # Agora é seguro recriar a rede
+    echo "Garantindo a existência da rede Docker overlay '${REDE_DOCKER}'..."
+    if docker network inspect "$REDE_DOCKER" >/dev/null 2>&1; then
+        msg_success "Rede '${REDE_DOCKER}' já existe e será reutilizada."
+    else
+        docker network create --driver=overlay --attachable "$REDE_DOCKER" || msg_fatal "Falha ao criar a rede overlay '${REDE_DOCKER}'."
+        msg_success "Rede '${REDE_DOCKER}' criada com sucesso."
+    fi
+
+    # Limpar volumes antigos
+    echo "Limpando volumes de banco de dados para garantir ambiente limpo..."
+    docker volume rm "${POSTGRES_VOLUME}" >/dev/null 2>&1
+    sleep 5
+
+    # Criar volumes necessários
+    echo "Criando volumes Docker..."
+    docker volume create "portainer_data" >/dev/null 2>&1
+    docker volume create "volume_swarm_certificates" >/dev/null 2>&1
+    docker volume create "volume_swarm_shared" >/dev/null 2>&1
+    docker volume create "${POSTGRES_VOLUME}" >/dev/null 2>&1
+    docker volume create "${REDIS_VOLUME}" >/dev/null 2>&1
+    docker volume create "${MINIO_VOLUME}" >/dev/null 2>&1
+    docker volume create "${EVOLUTION_VOLUME}" >/dev/null 2>&1
+    msg_success "Ambiente preparado e volumes criados."
 
     # --- ETAPA 1: INSTALAR TRAEFIK E PORTAINER ---
     msg_header "[1/5] INSTALANDO TRAEFIK E PORTAINER"

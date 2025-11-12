@@ -1769,11 +1769,18 @@ main() {
     echo "Determinando melhor endpoint para operações da API..."
     local PORTAINER_API_ENDPOINT="https://${PORTAINER_DOMAIN}"
 
-    # Testar se domínio HTTPS está acessível
-    if curl -s -k --connect-timeout 5 --max-time 10 "${PORTAINER_API_ENDPOINT}/api/users/admin/check" >/dev/null 2>&1; then
+    # Testar se domínio HTTPS está realmente acessível e respondendo com Portainer válido
+    echo "Testando se ${PORTAINER_API_ENDPOINT} está acessível..."
+    local https_test_response
+    https_test_response=$(curl -s -k --connect-timeout 5 --max-time 10 "${PORTAINER_API_ENDPOINT}/api/users/admin/check" 2>/dev/null)
+
+    # Verificar se recebeu resposta válida do Portainer (true, false, ou JSON com "message")
+    if [[ "$https_test_response" == "true" ]] || [[ "$https_test_response" == "false" ]] || echo "$https_test_response" | jq -e '.message' >/dev/null 2>&1; then
         msg_success "Domínio HTTPS está acessível via Traefik. Usando: ${PORTAINER_API_ENDPOINT}"
     else
-        msg_warning "Domínio HTTPS não está acessível ainda. Usando endpoint direto: ${PORTAINER_WORKING_ENDPOINT}"
+        msg_warning "Domínio HTTPS não está respondendo corretamente ainda."
+        echo "Resposta recebida: ${https_test_response:0:100}"
+        echo "Usando endpoint direto: ${PORTAINER_WORKING_ENDPOINT}"
         PORTAINER_API_ENDPOINT="$PORTAINER_WORKING_ENDPOINT"
     fi
 

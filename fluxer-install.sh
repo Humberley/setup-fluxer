@@ -1373,30 +1373,216 @@ main() {
     wait_stack "traefik" "traefik"
     wait_stack "portainer" "portainer"
 
-    echo "Aguardando 10 segundos para estabilização inicial..."; sleep 10
+    echo "Aguardando 5 segundos para estabilização inicial..."
+    sleep 5
 
-    # Aguardar porta 9000 estar disponível
-    echo "Aguardando Portainer estar acessível na porta 9000..."
+    # === VERIFICAÇÃO 1: PORTA TCP ABERTA ===
+    echo -e "\n${NEGRITO}[Verificação 1/5]${RESET} Aguardando porta 9000 aceitar conexões TCP..."
     local port_retries=60
     while ! nc -z localhost 9000 2>/dev/null && [ $port_retries -gt 0 ]; do
         printf "."
         sleep 2
         ((port_retries--))
     done
+    echo ""
 
     if [ $port_retries -le 0 ]; then
-        msg_fatal "Portainer não ficou acessível na porta 9000 após 120 segundos."
+        msg_error "Porta 9000 não ficou acessível após 120 segundos."
+        echo "Verificando logs do Portainer para diagnóstico..."
+        docker service logs portainer_portainer --tail 20
+        msg_fatal "Portainer não ficou acessível na porta 9000."
+    fi
+    msg_success "Porta 9000 está aceitando conexões TCP."
+
+    # === VERIFICAÇÃO 2: HTTP RESPONDENDO ===
+    echo -e "\n${NEGRITO}[Verificação 2/5]${RESET} Verificando se o servidor HTTP está respondendo..."
+    local http_retries=30
+    local http_works=false
+    while [ $http_retries -gt 0 ]; do
+        local test_response
+        test_response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 --max-time 5 http://localhost:9000/ 2>/dev/null || echo "000")
+
+        if [[ "$test_response" != "000" ]]; then
+            msg_success "Servidor HTTP do Portainer está respondendo (HTTP ${test_response})."
+            http_works=true
+            break
+        fi
+
+        printf "."
+        sleep 2
+        ((http_retries--))
+    done
+    echo ""
+
+    if [ "$http_works" = false ]; then
+        msg_error "Servidor HTTP não está respondendo após 60 segundos."
+        echo "Verificando logs do Portainer..."
+        docker service logs portainer_portainer --tail 30
+        msg_fatal "Portainer HTTP não está funcional."
     fi
 
-    msg_success "Portainer está acessível!"
-    echo "Aguardando mais 15 segundos para garantir inicialização completa..."; sleep 15
+    # === VERIFICAÇÃO 3: API STATUS ENDPOINT ===
+    echo -e "\n${NEGRITO}[Verificação 3/5]${RESET} Verificando se a API está inicializada..."
+    local api_retries=30
+    local api_ready=false
+    while [ $api_retries -gt 0 ]; do
+        local status_response
+        status_response=$(curl -s --connect-timeout 3 --max-time 5 http://localhost:9000/api/status 2>/dev/null || echo "")
 
-    echo "Tentando criar conta de administrador no Portainer (timeout 5min)..."; local max_retries=30; local account_created=false
-    for i in $(seq 1 $max_retries); do
-        local init_response; init_response=$(curl -s -k -w "\n%{http_code}" --max-time 5 -X POST "http://localhost:9000/api/users/admin/init" -H "Content-Type: application/json" --data "{\"Username\": \"admin\", \"Password\": \"${PORTAINER_PASSWORD}\"}"); local http_code=$(tail -n1 <<< "$init_response"); local response_body=$(sed '$ d' <<< "$init_response")
-        if [[ "$http_code" == "200" ]]; then msg_success "Utilizador 'admin' do Portainer criado!"; account_created=true; break; else msg_warning "Tentativa ${i}/${max_retries} falhou."; echo "Código HTTP: ${http_code}"; echo "Resposta: ${response_body}"; echo "Aguardando 10s..."; sleep 10; fi
+        # Se recebeu qualquer resposta JSON válida, a API está pronta
+        if echo "$status_response" | jq -e . >/dev/null 2>&1; then
+            msg_success "API do Portainer está inicializada e respondendo."
+            echo "Resposta da API: ${status_response}"
+            api_ready=true
+            break
+        fi
+
+        printf "."
+        sleep 2
+        ((api_retries--))
     done
-    if [ "$account_created" = false ]; then msg_fatal "Não foi possível criar a conta de administrador no Portainer."; fi
+    echo ""
+
+    if [ "$api_ready" = false ]; then
+        msg_warning "Endpoint /api/status não respondeu. Tentando endpoint alternativo..."
+
+        # Tenta /api/users/admin/check como alternativa
+        local check_response
+        check_response=$(curl -s --connect-timeout 3 --max-time 5 http://localhost:9000/api/users/admin/check 2>/dev/null || echo "")
+
+        if [[ -n "$check_response" ]]; then
+            msg_success "API está respondendo via endpoint /api/users/admin/check"
+            api_ready=true
+        else
+            msg_error "Nenhum endpoint da API está respondendo."
+            echo "Verificando logs do Portainer..."
+            docker service logs portainer_portainer --tail 40
+            msg_fatal "API do Portainer não está funcional."
+        fi
+    fi
+
+    # === VERIFICAÇÃO 4: CHECAR SE ADMIN JÁ EXISTE ===
+    echo -e "\n${NEGRITO}[Verificação 4/5]${RESET} Verificando se usuário admin já foi criado..."
+    local admin_check
+    admin_check=$(curl -s --connect-timeout 3 --max-time 5 http://localhost:9000/api/users/admin/check 2>/dev/null || echo "")
+
+    if echo "$admin_check" | jq -e . >/dev/null 2>&1; then
+        echo "Resposta de /api/users/admin/check: ${admin_check}"
+
+        # Se retornar true, admin já existe
+        if [[ "$(echo "$admin_check" | jq -r '.')" == "true" ]]; then
+            msg_warning "Usuário admin já existe no Portainer!"
+            echo "Pulando criação da conta. Tentando obter token com credenciais existentes..."
+            local account_created=true
+        else
+            msg_success "Usuário admin ainda não foi criado. Prosseguindo com criação..."
+        fi
+    else
+        msg_warning "Não foi possível verificar status do admin. Prosseguindo com criação..."
+    fi
+
+    # === VERIFICAÇÃO 5: VERIFICAR SE NÃO ENTROU EM TIMEOUT ===
+    echo -e "\n${NEGRITO}[Verificação 5/5]${RESET} Verificando se Portainer não entrou em timeout de segurança..."
+    local recent_logs
+    recent_logs=$(docker service logs portainer_portainer --tail 10 2>/dev/null || echo "")
+
+    if echo "$recent_logs" | grep -q "timed out for security purposes"; then
+        msg_error "Portainer entrou no timeout de 5 minutos de segurança!"
+        echo "É necessário reiniciar o serviço Portainer."
+        echo "Reiniciando Portainer..."
+        docker service update --force portainer_portainer >/dev/null 2>&1
+        echo "Aguardando 30 segundos para o Portainer reiniciar..."
+        sleep 30
+
+        # Re-verificar porta e HTTP após reinício
+        echo "Verificando se Portainer está acessível após reinício..."
+        local restart_retries=30
+        while ! nc -z localhost 9000 2>/dev/null && [ $restart_retries -gt 0 ]; do
+            printf "."
+            sleep 2
+            ((restart_retries--))
+        done
+        echo ""
+
+        if [ $restart_retries -le 0 ]; then
+            msg_fatal "Portainer não ficou acessível após reinício."
+        fi
+        msg_success "Portainer reiniciado e acessível."
+    else
+        msg_success "Portainer não está em timeout. Prosseguindo..."
+    fi
+
+    # === CRIAÇÃO DA CONTA ADMIN ===
+    if [ "${account_created:-false}" != "true" ]; then
+        echo -e "\n${NEGRITO}Iniciando criação da conta de administrador...${RESET}"
+        echo "Tentando criar conta de administrador no Portainer (máximo 20 tentativas)..."
+
+        local max_retries=20
+        local account_created=false
+
+        for i in $(seq 1 $max_retries); do
+            echo -e "\n${NEGRITO}Tentativa ${i}/${max_retries}${RESET}"
+
+            # Curl com mais opções de debug e timeout
+            local init_response
+            init_response=$(curl -v -s -k -w "\n%{http_code}" \
+                --connect-timeout 5 \
+                --max-time 10 \
+                -X POST "http://localhost:9000/api/users/admin/init" \
+                -H "Content-Type: application/json" \
+                --data "{\"Username\": \"admin\", \"Password\": \"${PORTAINER_PASSWORD}\"}" \
+                2>&1)
+
+            local http_code=$(echo "$init_response" | tail -n1)
+            local response_body=$(echo "$init_response" | sed '$ d')
+
+            echo "Código HTTP: ${http_code}"
+
+            if [[ "$http_code" == "200" ]]; then
+                msg_success "Utilizador 'admin' do Portainer criado com sucesso!"
+                account_created=true
+                break
+            elif [[ "$http_code" == "409" ]]; then
+                msg_warning "Utilizador admin já existe (HTTP 409)."
+                account_created=true
+                break
+            elif [[ "$http_code" == "000" ]]; then
+                msg_warning "Falha na conexão (HTTP 000 - conexão recusada ou timeout)."
+                echo "Detalhes técnicos da tentativa:"
+                echo "$response_body" | grep -E "(Could not connect|Connection refused|Failed to connect|timeout)" || echo "Sem detalhes de erro específicos."
+
+                # Verificar se o serviço ainda está rodando
+                echo "Verificando status do serviço..."
+                docker service ps portainer_portainer --no-trunc --format "{{.CurrentState}}" | head -n1
+
+                # Verificar logs recentes
+                echo "Últimas 5 linhas do log:"
+                docker service logs portainer_portainer --tail 5 2>/dev/null || echo "Não foi possível obter logs."
+
+            else
+                msg_warning "Falha com código HTTP: ${http_code}"
+                echo "Resposta da API:"
+                echo "$response_body" | grep -v "^*" | grep -v "^>" | grep -v "^<" | head -n10
+            fi
+
+            if [ $i -lt $max_retries ]; then
+                echo "Aguardando 15 segundos antes da próxima tentativa..."
+                sleep 15
+            fi
+        done
+
+        if [ "$account_created" = false ]; then
+            msg_error "Não foi possível criar a conta de administrador após ${max_retries} tentativas."
+            echo -e "\n${AMARELO}Informações de diagnóstico:${RESET}"
+            echo "1. Status do serviço Portainer:"
+            docker service ps portainer_portainer --no-trunc
+            echo -e "\n2. Logs completos do Portainer (últimas 50 linhas):"
+            docker service logs portainer_portainer --tail 50
+            echo -e "\n3. Portas em uso:"
+            netstat -tulpn | grep 9000 || ss -tulpn | grep 9000
+            msg_fatal "Falha na criação da conta do Portainer."
+        fi
+    fi
 
     # --- ETAPA 3: OBTENDO CHAVE DE API ---
     msg_header "[3/5] OBTENDO CHAVE DE API DO PORTAINER"

@@ -1373,13 +1373,20 @@ main() {
 
     # --- ETAPA 1: INSTALAR TRAEFIK E PORTAINER ---
     msg_header "[1/5] INSTALANDO TRAEFIK E PORTAINER"
-    
+
+    # Abordagem SetupOrion: Salvar YAML em arquivo antes de fazer deploy
     echo "---"; echo "Implantando: ${NEGRITO}traefik${RESET}...";
-    docker stack deploy --compose-file <(echo "$(generate_traefik_yml)") traefik || msg_fatal "Falha ao implantar Traefik."
+    local traefik_yml="/tmp/traefik_deploy.yml"
+    generate_traefik_yml > "$traefik_yml"
+    docker stack deploy --prune --resolve-image always -c "$traefik_yml" traefik || msg_fatal "Falha ao implantar Traefik."
+    rm -f "$traefik_yml"
     msg_success "Stack 'traefik' implantado."
-    
+
     echo "---"; echo "Implantando: ${NEGRITO}portainer${RESET}...";
-    docker stack deploy --compose-file <(echo "$(generate_portainer_yml)") portainer || msg_fatal "Falha ao implantar Portainer."
+    local portainer_yml="/tmp/portainer_deploy.yml"
+    generate_portainer_yml > "$portainer_yml"
+    docker stack deploy --prune --resolve-image always -c "$portainer_yml" portainer || msg_fatal "Falha ao implantar Portainer."
+    rm -f "$portainer_yml"
     msg_success "Stack 'portainer' implantado."
 
     # --- ETAPA 2: VERIFICAR SERVIÇOS E CONFIGURAR PORTAINER ---

@@ -245,7 +245,7 @@ services:
         - "traefik.enable=true"
         - "traefik.http.middlewares.redirect-https.redirectscheme.scheme=https"
         - "traefik.http.middlewares.redirect-https.redirectscheme.permanent=true"
-        - "traefik.http.routers.http-catchall.rule=Host(\`{host:.+}\`)"
+        - "traefik.http.routers.http-catchall.rule=Host(`{host:.+}`)"
         - "traefik.http.routers.http-catchall.entrypoints=web"
         - "traefik.http.routers.http-catchall.middlewares=redirect-https@docker"
         - "traefik.http.routers.http-catchall.priority=1"
@@ -300,7 +300,7 @@ services:
         constraints: [node.role == manager]
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.portainer.rule=Host(\`${PORTAINER_DOMAIN}\`)"
+        - "traefik.http.routers.portainer.rule=Host(`${PORTAINER_DOMAIN}`)"
         - "traefik.http.services.portainer.loadbalancer.server.port=9000"
         - "traefik.http.routers.portainer.tls.certresolver=letsencryptresolver"
         - "traefik.http.routers.portainer.service=portainer"
@@ -434,7 +434,7 @@ services:
         - "traefik.enable=true"
 
         # S3 público
-        - "traefik.http.routers.minio_public.rule=Host(\`${MINIO_S3_DOMAIN}\`)"
+        - "traefik.http.routers.minio_public.rule=Host(`${MINIO_S3_DOMAIN}`)"
         - "traefik.http.routers.minio_public.entrypoints=websecure"
         - "traefik.http.routers.minio_public.tls.certresolver=letsencryptresolver"
         - "traefik.http.services.minio_public.loadbalancer.server.port=9000"
@@ -442,7 +442,7 @@ services:
         - "traefik.http.routers.minio_public.service=minio_public"
 
         # Console
-        - "traefik.http.routers.minio_console.rule=Host(\`${MINIO_CONSOLE_DOMAIN}\`)"
+        - "traefik.http.routers.minio_console.rule=Host(`${MINIO_CONSOLE_DOMAIN}`)"
         - "traefik.http.routers.minio_console.entrypoints=websecure"
         - "traefik.http.routers.minio_console.tls.certresolver=letsencryptresolver"
         - "traefik.http.services.minio_console.loadbalancer.server.port=9001"
@@ -535,7 +535,7 @@ services:
           memory: 1024M
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.n8n_editor.rule=Host(\`${N8N_EDITOR_DOMAIN}\`)"
+        - "traefik.http.routers.n8n_editor.rule=Host(`${N8N_EDITOR_DOMAIN}`)"
         - "traefik.http.routers.n8n_editor.entrypoints=websecure"
         - "traefik.http.routers.n8n_editor.priority=1"
         - "traefik.http.routers.n8n_editor.tls.certresolver=letsencryptresolver"
@@ -612,7 +612,7 @@ services:
           memory: 1024M
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.n8n_webhook.rule=Host(\`${N8N_WEBHOOK_DOMAIN}\`)"
+        - "traefik.http.routers.n8n_webhook.rule=Host(`${N8N_WEBHOOK_DOMAIN}`)"
         - "traefik.http.routers.n8n_webhook.entrypoints=websecure"
         - "traefik.http.routers.n8n_webhook.priority=1"
         - "traefik.http.routers.n8n_webhook.tls.certresolver=letsencryptresolver"
@@ -742,7 +742,7 @@ services:
       labels:
         - "io.portainer.accesscontrol.users=admin"
         - "traefik.enable=true"
-        - "traefik.http.routers.typebot_builder.rule=Host(\`${TYPEBOT_EDITOR_DOMAIN}\`)"
+        - "traefik.http.routers.typebot_builder.rule=Host(`${TYPEBOT_EDITOR_DOMAIN}`)"
         - "traefik.http.routers.typebot_builder.entrypoints=websecure"
         - "traefik.http.routers.typebot_builder.tls.certresolver=letsencryptresolver"
         - "traefik.http.services.typebot_builder.loadbalancer.server.port=3000"
@@ -791,7 +791,7 @@ services:
       labels:
         - "io.portainer.accesscontrol.users=admin"
         - "traefik.enable=true"
-        - "traefik.http.routers.typebot_viewer.rule=Host(\`${TYPEBOT_VIEWER_DOMAIN}\`)"
+        - "traefik.http.routers.typebot_viewer.rule=Host(`${TYPEBOT_VIEWER_DOMAIN}`)"
         - "traefik.http.routers.typebot_viewer.entrypoints=websecure"
         - "traefik.http.routers.typebot_viewer.tls.certresolver=letsencryptresolver"
         - "traefik.http.services.typebot_viewer.loadbalancer.server.port=3000"
@@ -979,7 +979,7 @@ services:
           - node.role == manager
       labels:
         - "traefik.enable=1"
-        - "traefik.http.routers.evolution.rule=Host(\`${EVOLUTION_DOMAIN}\`)"
+        - "traefik.http.routers.evolution.rule=Host(`${EVOLUTION_DOMAIN}`)"
         - "traefik.http.routers.evolution.entrypoints=websecure"
         - "traefik.http.routers.evolution.priority=1"
         - "traefik.http.routers.evolution.tls.certresolver=letsencryptresolver"

@@ -1366,7 +1366,23 @@ main() {
     wait_stack "traefik" "traefik"
     wait_stack "portainer" "portainer"
 
-    echo "Aguardando 30 segundos para estabilização inicial..."; sleep 30
+    echo "Aguardando 10 segundos para estabilização inicial..."; sleep 10
+
+    # Aguardar porta 9000 estar disponível
+    echo "Aguardando Portainer estar acessível na porta 9000..."
+    local port_retries=60
+    while ! nc -z localhost 9000 2>/dev/null && [ $port_retries -gt 0 ]; do
+        printf "."
+        sleep 2
+        ((port_retries--))
+    done
+
+    if [ $port_retries -le 0 ]; then
+        msg_fatal "Portainer não ficou acessível na porta 9000 após 120 segundos."
+    fi
+
+    msg_success "Portainer está acessível!"
+    echo "Aguardando mais 15 segundos para garantir inicialização completa..."; sleep 15
 
     echo "Tentando criar conta de administrador no Portainer (timeout 5min)..."; local max_retries=30; local account_created=false
     for i in $(seq 1 $max_retries); do

@@ -1373,33 +1373,63 @@ main() {
     wait_stack "traefik" "traefik"
     wait_stack "portainer" "portainer"
 
-    echo "Aguardando 5 segundos para estabilização inicial..."
-    sleep 5
+    echo "Aguardando 10 segundos para estabilização inicial..."
+    sleep 10
 
-    # Verificar se o Portainer já iniciou o servidor HTTP nos logs
-    echo "Verificando se Portainer já iniciou o servidor HTTP..."
-    local http_started=false
-    for check in {1..20}; do
-        if docker service logs portainer_portainer --tail 20 2>/dev/null | grep -q "starting HTTP server"; then
-            msg_success "Portainer iniciou o servidor HTTP."
-            http_started=true
+    # === DIAGNÓSTICO INICIAL ===
+    echo -e "\n${NEGRITO}Executando diagnóstico inicial do Portainer...${RESET}"
+
+    echo "1. Status do serviço:"
+    docker service ps portainer_portainer --format "{{.CurrentState}}" | head -n1
+
+    echo -e "\n2. Últimas 5 linhas do log:"
+    docker service logs portainer_portainer --tail 5 2>/dev/null
+
+    echo -e "\n3. Porta 9000 no netstat/ss:"
+    (netstat -tulpn 2>/dev/null || ss -tulpn 2>/dev/null) | grep 9000 || echo "Porta 9000 não encontrada ainda"
+
+    echo -e "\n4. IP do container Portainer:"
+    docker service inspect portainer_portainer --format '{{range .Endpoint.VirtualIPs}}{{.Addr}}{{end}}' 2>/dev/null || echo "Não foi possível obter IP"
+
+    # === VERIFICAÇÃO 1: AGUARDAR "starting HTTP server" NOS LOGS ===
+    echo -e "\n${NEGRITO}[Verificação 1/5]${RESET} Aguardando Portainer iniciar servidor HTTP..."
+    echo "Monitorando logs até ver 'starting HTTP server'..."
+    local log_retries=60
+    local http_log_found=false
+
+    while [ $log_retries -gt 0 ]; do
+        if docker service logs portainer_portainer --tail 30 2>/dev/null | grep -q "starting HTTP server"; then
+            msg_success "Portainer iniciou o servidor HTTP (confirmado via logs)."
+            http_log_found=true
             break
         fi
         printf "."
         sleep 2
+        ((log_retries--))
+
+        # Debug a cada 15 tentativas
+        if [ $((log_retries % 15)) -eq 0 ]; then
+            echo -e "\n  [Debug] Ainda aguardando 'starting HTTP server' nos logs..."
+            echo "  Última linha do log:"
+            docker service logs portainer_portainer --tail 1 2>/dev/null
+        fi
     done
     echo ""
 
-    if [ "$http_started" = true ]; then
-        echo "Aguardando 10 segundos adicionais para API estar pronta..."
-        sleep 10
-    else
-        msg_warning "Não foi possível confirmar início do HTTP server nos logs. Prosseguindo..."
+    if [ "$http_log_found" = false ]; then
+        msg_warning "Não detectamos 'starting HTTP server' nos logs após 120 segundos."
+        echo "Logs atuais completos:"
+        docker service logs portainer_portainer --tail 20
+        msg_fatal "Portainer não está inicializando corretamente."
     fi
 
-    # === VERIFICAÇÃO 1: PORTA TCP ABERTA ===
-    echo -e "\n${NEGRITO}[Verificação 1/5]${RESET} Aguardando porta 9000 aceitar conexões TCP..."
-    local port_retries=60
+    # Aguardar MAIS tempo após confirmar que HTTP iniciou
+    echo "Aguardando 20 segundos para servidor HTTP ficar totalmente operacional..."
+    sleep 20
+
+    # === VERIFICAÇÃO 2: PORTA TCP ABERTA ===
+    echo -e "\n${NEGRITO}[Verificação 2/5]${RESET} Testando conexão TCP na porta 9000..."
+    local port_retries=30
     while ! nc -z localhost 9000 2>/dev/null && [ $port_retries -gt 0 ]; do
         printf "."
         sleep 2
@@ -1408,58 +1438,75 @@ main() {
     echo ""
 
     if [ $port_retries -le 0 ]; then
-        msg_error "Porta 9000 não ficou acessível após 120 segundos."
-        echo "Verificando logs do Portainer para diagnóstico..."
-        docker service logs portainer_portainer --tail 20
+        msg_error "Porta 9000 não está aceitando conexões TCP."
+        echo "Portas abertas:"
+        (netstat -tulpn 2>/dev/null || ss -tulpn 2>/dev/null) | grep -E "(9000|9443)"
         msg_fatal "Portainer não ficou acessível na porta 9000."
     fi
     msg_success "Porta 9000 está aceitando conexões TCP."
 
-    # === VERIFICAÇÃO 2: HTTP RESPONDENDO ===
-    echo -e "\n${NEGRITO}[Verificação 2/5]${RESET} Verificando se o servidor HTTP está respondendo..."
-    local http_retries=30
+    # === VERIFICAÇÃO 3: HTTP REALMENTE RESPONDENDO ===
+    echo -e "\n${NEGRITO}[Verificação 3/5]${RESET} Testando se HTTP está respondendo requisições..."
+    echo "Usando múltiplas estratégias de teste..."
+    local http_retries=40
     local http_works=false
     local attempt_count=0
 
     while [ $http_retries -gt 0 ]; do
         ((attempt_count++))
 
-        # Executar curl e capturar código HTTP de forma confiável
-        local test_response
-        test_response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 --max-time 5 http://localhost:9000/ 2>/dev/null)
+        # Estratégia 1: Tentar obter conteúdo HTML
+        local html_test
+        html_test=$(curl -s --connect-timeout 5 --max-time 10 http://localhost:9000/ 2>/dev/null | head -c 100)
 
-        # Garantir que temos exatamente 3 dígitos, removendo tudo que não é dígito e pegando últimos 3 caracteres
-        test_response=$(echo "$test_response" | tr -cd '0-9' | tail -c 3)
-
-        # Debug: mostrar o que foi capturado a cada 10 tentativas
-        if [ $((attempt_count % 10)) -eq 0 ]; then
-            echo -e "\n  [Debug] Tentativa ${attempt_count}/30 - Código HTTP capturado: '${test_response}'"
-        fi
-
-        # Verificar se é um código HTTP válido (200-599)
-        if [[ "$test_response" =~ ^[2-5][0-9][0-9]$ ]]; then
-            msg_success "Servidor HTTP do Portainer está respondendo (HTTP ${test_response})."
+        if [[ -n "$html_test" ]] && [[ "$html_test" =~ [a-zA-Z] ]]; then
+            msg_success "Servidor HTTP está respondendo com conteúdo!"
+            echo "Primeiros caracteres da resposta: ${html_test:0:50}..."
             http_works=true
             break
         fi
 
-        # Log a cada 5 tentativas
-        if [ $((attempt_count % 5)) -eq 0 ] && [ $((attempt_count % 10)) -ne 0 ]; then
-            echo -e "\n  Tentativa ${attempt_count}/30 - aguardando resposta HTTP válida..."
+        # Estratégia 2: Verificar código HTTP
+        local http_code
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 http://localhost:9000/ 2>/dev/null)
+        http_code=$(echo "$http_code" | tr -cd '0-9' | tail -c 3)
+
+        if [[ "$http_code" =~ ^[2-5][0-9][0-9]$ ]]; then
+            msg_success "Servidor HTTP está respondendo (HTTP ${http_code})."
+            http_works=true
+            break
+        fi
+
+        # Debug a cada 10 tentativas
+        if [ $((attempt_count % 10)) -eq 0 ]; then
+            echo -e "\n  [Debug] Tentativa ${attempt_count}/40"
+            echo "  HTTP Code: '${http_code}' | HTML Response: '${html_test:0:30}'"
+            echo "  Testando IPv4 explicitamente:"
+            curl -4 -v -s --connect-timeout 3 --max-time 5 http://127.0.0.1:9000/ 2>&1 | head -n 15
+        elif [ $((attempt_count % 5)) -eq 0 ]; then
+            echo -e "\n  Tentativa ${attempt_count}/40 - aguardando HTTP responder..."
         else
             printf "."
         fi
 
-        sleep 2
+        sleep 3
         ((http_retries--))
     done
     echo ""
 
     if [ "$http_works" = false ]; then
-        msg_error "Servidor HTTP não está respondendo após 60 segundos."
-        echo "Última resposta capturada: '${test_response}'"
-        echo "Verificando logs do Portainer..."
-        docker service logs portainer_portainer --tail 30
+        msg_error "Servidor HTTP não está respondendo após 120 segundos."
+        echo -e "\n${AMARELO}=== DIAGNÓSTICO COMPLETO ===${RESET}"
+        echo -e "\n1. Teste curl verbose completo:"
+        curl -v http://localhost:9000/ 2>&1 | head -n 30
+        echo -e "\n2. Teste curl com IPv4:"
+        curl -4 -v http://127.0.0.1:9000/ 2>&1 | head -n 30
+        echo -e "\n3. Logs completos do Portainer:"
+        docker service logs portainer_portainer --tail 50
+        echo -e "\n4. Status do container:"
+        docker service ps portainer_portainer --no-trunc
+        echo -e "\n5. Inspect do serviço:"
+        docker service inspect portainer_portainer --pretty
         msg_fatal "Portainer HTTP não está funcional."
     fi
 
